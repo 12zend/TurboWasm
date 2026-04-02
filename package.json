@@ -1,8 +1,0 @@
-{
-  "name": "turbowasm-root",
-  "private": true,
-  "scripts": {
-    "install:all": "cd vm && npm install && cd ../gui && npm install",
-    "build": "npm run install:all && cd gui && npm run build"
-  }
-}
