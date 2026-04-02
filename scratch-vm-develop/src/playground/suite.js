@@ -490,7 +490,7 @@ window.upload = function (_this) {
 window.download = function (_this) {
     const blob = new Blob([JSON.stringify({
         meta: {
-            source: 'Scratch VM Benchmark Suite',
+            source: 'TurboWasm Suite',
             version: 1
         },
         results: Object.values(suiteView.views)
@@ -498,7 +498,7 @@ window.download = function (_this) {
             .filter(view => view.status === BENCH_STATUS.COMPLETE)
     })], {type: 'application/json'});
 
-    _this.download = 'scratch-vm-benchmark.json';
+    _this.download = 'turbowasm-suite.json';
     _this.href = URL.createObjectURL(blob);
 };
 
