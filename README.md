@@ -1,5 +1,5 @@
 ## TurboWasm
-TurboWasm is a mod for TurboWarp that achieves faster execution than TurboWarp by utilizing compilation to WebAssembly.
+TurboWasm is a mod for TurboWarp that achieves faster execution than TurboWarp by utilizing compile to WebAssembly.
 
 ## License
 This project is based on TurboWarp.
