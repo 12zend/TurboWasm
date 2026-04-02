@@ -11,7 +11,7 @@ Unless otherwise noted, this project is licensed under GPL-3.0.
 If a copy of the GPL-3.0 was not distributed with this file, You can obtain one at https://www.gnu.org/licenses/gpl-3.0.html.
 
 This project contains modified code from TurboWarp:
-https://github.com/TurboWarp
+https://github.com/TurboWarp/
 https://turbowarp.org/
 
 This project is not affiliated with the official TurboWarp project.
