@@ -528,14 +528,11 @@ class Thread {
 
         this.generator = result.startingFunction(this)();
         this.executableHat = result.executableHat;
-    }
 
         if (!this.blockContainer.forceNoGlow) {
             this.blockGlowInFrame = this.topBlock;
             this.requestScriptGlowInFrame = true;
         }
-
-        this.isCompiled = true;
     }
 }
 
