@@ -491,31 +491,44 @@ class Thread {
 
         let result;
         if (cachedResult) {
-            result = cachedResult.value;
+            this.handleCompileResult(cachedResult.value);
         } else {
-            try {
-                result = compile(this);
+            const compileResult = compile(this);
+            if (compileResult instanceof Promise) {
+                compileResult.then(result => {
+                    this.handleCompileResult(result);
+                    if (canCache) {
+                        blocks.cacheCompileResult(topBlock, result);
+                    }
+                }).catch(error => {
+                    log.error('cannot compile script', this.target.getName(), error);
+                    if (canCache) {
+                        blocks.cacheCompileError(topBlock, error);
+                    }
+                    this.target.runtime.emitCompileError(this.target, error);
+                });
+            } else {
+                this.handleCompileResult(compileResult);
                 if (canCache) {
-                    blocks.cacheCompileResult(topBlock, result);
+                    blocks.cacheCompileResult(topBlock, compileResult);
                 }
-            } catch (error) {
-                log.error('cannot compile script', this.target.getName(), error);
-                if (canCache) {
-                    blocks.cacheCompileError(topBlock, error);
-                }
-                this.target.runtime.emitCompileError(this.target, error);
-                return;
             }
         }
+    }
 
+    /**
+     * @param {Object} result The result of the compiler.
+     */
+    handleCompileResult (result) {
+        this.isCompiled = true;
         this.procedures = {};
         for (const procedureCode of Object.keys(result.procedures)) {
             this.procedures[procedureCode] = result.procedures[procedureCode](this);
         }
 
         this.generator = result.startingFunction(this)();
-
         this.executableHat = result.executableHat;
+    }
 
         if (!this.blockContainer.forceNoGlow) {
             this.blockGlowInFrame = this.topBlock;

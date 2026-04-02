@@ -1193,6 +1193,9 @@ class JSGenerator {
             JSGenerator.testingApparatus.report(this, factory);
         }
 
+        // Add reference to source for worker compatibility
+        fn.factorySource = factory;
+
         return fn;
     }
 }
