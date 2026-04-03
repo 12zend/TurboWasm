@@ -2209,15 +2209,13 @@ class Runtime extends EventEmitter {
         const newThreads = [];
         // Look up metadata for the relevant hat.
         const hatMeta = instance._hats[requestedHatOpcode];
-
-        for (const opts in optMatchFields) {
-            if (!Object.prototype.hasOwnProperty.call(optMatchFields, opts)) continue;
-            optMatchFields[opts] = optMatchFields[opts].toUpperCase();
+        const matchFields = optMatchFields || null;
+        if (matchFields) {
+            for (const opts in matchFields) {
+                if (!Object.prototype.hasOwnProperty.call(matchFields, opts)) continue;
+                matchFields[opts] = matchFields[opts].toUpperCase();
+            }
         }
-
-        // tw: By assuming that all new threads will not interfere with eachother, we can optimize the loops
-        // inside the allScriptsByOpcodeDo callback below.
-        const startingThreadListLength = this.threads.length;
 
         // Consider all scripts, looking for hats with opcode `requestedHatOpcode`.
         this.allScriptsByOpcodeDo(requestedHatOpcode, (script, target) => {
@@ -2231,34 +2229,28 @@ class Runtime extends EventEmitter {
             // This needs to happen before the block is evaluated
             // (i.e., before the predicate can be run) because "broadcast and wait"
             // needs to have a precise collection of started threads.
-            for (const matchField in optMatchFields) {
-                if (hatFields[matchField].value !== optMatchFields[matchField]) {
-                    // Field mismatch.
-                    return;
+            if (matchFields) {
+                for (const matchField in matchFields) {
+                    if (hatFields[matchField].value !== matchFields[matchField]) {
+                        // Field mismatch.
+                        return;
+                    }
                 }
             }
 
+            const threadId = Thread.getIdFromTargetAndBlock(target, topBlockId);
+            const existingThread = this.threadMap.get(threadId);
             if (hatMeta.restartExistingThreads) {
                 // If `restartExistingThreads` is true, we should stop
                 // any existing threads starting with the top block.
-                const existingThread = this.threadMap.get(Thread.getIdFromTargetAndBlock(target, topBlockId));
                 if (existingThread) {
                     newThreads.push(this._restartThread(existingThread));
                     return;
                 }
-            } else {
+            } else if (existingThread && existingThread.status !== Thread.STATUS_DONE) {
                 // If `restartExistingThreads` is false, we should
                 // give up if any threads with the top block are running.
-                for (let j = 0; j < startingThreadListLength; j++) {
-                    if (this.threads[j].target === target &&
-                        this.threads[j].topBlock === topBlockId &&
-                        // stack click threads and hat threads can coexist
-                        !this.threads[j].stackClick &&
-                        this.threads[j].status !== Thread.STATUS_DONE) {
-                        // Some thread is already running.
-                        return;
-                    }
-                }
+                return;
             }
             // Start the thread with this top block.
             newThreads.push(this._pushThread(topBlockId, target));
@@ -2513,6 +2505,25 @@ class Runtime extends EventEmitter {
         }
     }
 
+    _compactThreads () {
+        const threads = this.threads;
+        const threadMap = this.threadMap;
+        threadMap.clear();
+        let nextThread = 0;
+        for (let i = 0; i < threads.length; i++) {
+            const thread = threads[i];
+            if (thread.isKilled) {
+                continue;
+            }
+            threads[nextThread] = thread;
+            nextThread++;
+            if (!thread.stackClick && !thread.updateMonitor) {
+                threadMap.set(thread.getId(), thread);
+            }
+        }
+        threads.length = nextThread;
+    }
+
     /**
      * Repeatedly run `sequencer.stepThreads` and filter out
      * inactive threads after each iteration.
@@ -2530,8 +2541,7 @@ class Runtime extends EventEmitter {
         }
 
         // Clean up threads that were told to stop during or since the last step
-        this.threads = this.threads.filter(thread => !thread.isKilled);
-        this.updateThreadMap();
+        this._compactThreads();
 
         // Find all edge-activated hats, and add them to threads to be evaluated.
         for (const hatType in this._hats) {
@@ -2560,7 +2570,8 @@ class Runtime extends EventEmitter {
         // flag will still indicate that a script ran.
         this._emitProjectRunStatus(
             this.threads.length + doneThreads.length -
-                this._getMonitorThreadCount([...this.threads, ...doneThreads]));
+                this._getMonitorThreadCount(this.threads) -
+                this._getMonitorThreadCount(doneThreads));
         // Store threads that completed this iteration for testing and other
         // internal purposes.
         this._lastStepDoneThreads = doneThreads;
@@ -2611,9 +2622,11 @@ class Runtime extends EventEmitter {
      */
     _getMonitorThreadCount (threads) {
         let count = 0;
-        threads.forEach(thread => {
-            if (thread.updateMonitor) count++;
-        });
+        for (let i = 0; i < threads.length; i++) {
+            if (threads[i].updateMonitor) {
+                count++;
+            }
+        }
         return count;
     }
 

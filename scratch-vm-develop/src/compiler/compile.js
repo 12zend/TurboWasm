@@ -4,9 +4,16 @@ const {IRGenerator} = require('./irgen');
 const {IROptimizer} = require('./iroptimizer');
 const compilerWorkerProxy = require('./compiler-worker-proxy');
 const jsexecute = require('./jsexecute');
-const Cast = require('../util/cast');
 
 const wasmModuleCache = typeof WeakMap === 'function' ? new WeakMap() : null;
+
+const toWasmNumber = value => {
+    if (typeof value === 'number') {
+        return Number.isNaN(value) ? 0 : value;
+    }
+    const n = +value;
+    return Number.isNaN(n) ? 0 : n;
+};
 
 /**
  * @typedef {Object} CompiledScript
@@ -73,25 +80,6 @@ const compile = thread => {
         effects: target.effects
     };
 
-    const readVariable = (runtimeThread, variableInfo) => {
-        const variable = runtimeThread.target.lookupVariableById(variableInfo.id);
-        if (!variable) {
-            return 0;
-        }
-        return Cast.toNumber(variable.value);
-    };
-
-    const writeVariable = (runtimeThread, variableInfo, value) => {
-        const variable = runtimeThread.target.lookupVariableById(variableInfo.id);
-        if (!variable) {
-            return;
-        }
-        variable.value = value;
-        if (variable.isCloud) {
-            runtimeThread.target.runtime.ioDevices.cloud.requestUpdateVariable(variable.name, value);
-        }
-    };
-
     const getWasmModuleCacheKey = data => {
         if (!data.wasmBytes) {
             return null;
@@ -129,30 +117,45 @@ const compile = thread => {
             slot: variableInfo.offset >>> 3
         }));
         return runtimeThread => () => {
+            const runtime = runtimeThread.target.runtime;
             const memory = new WebAssembly.Memory({initial: 1});
+            let requestedRedraw = false;
             const instance = new WebAssembly.Instance(module, {
                 env: {
                     memory,
                     requestRedraw: () => {
-                        runtimeThread.target.runtime.requestRedraw();
+                        requestedRedraw = true;
                     }
                 }
             });
             const numericMemory = variableSlots.length > 0 ? new Float64Array(memory.buffer) : null;
+            const runtimeVariables = variableSlots.length > 0 ?
+                variableSlots.map(variableInfo => runtimeThread.target.lookupVariableById(variableInfo.id) || null) :
+                null;
+            const cloud = runtime.ioDevices.cloud;
 
-            for (const variableInfo of variableSlots) {
-                numericMemory[variableInfo.slot] = readVariable(runtimeThread, variableInfo);
+            for (let i = 0; i < variableSlots.length; i++) {
+                const variable = runtimeVariables[i];
+                numericMemory[variableSlots[i].slot] = variable ? toWasmNumber(variable.value) : 0;
             }
 
             return {
                 next: () => {
                     const status = instance.exports.run();
-                    for (const variableInfo of variableSlots) {
-                        writeVariable(
-                            runtimeThread,
-                            variableInfo,
-                            numericMemory[variableInfo.slot]
-                        );
+                    for (let i = 0; i < variableSlots.length; i++) {
+                        const variable = runtimeVariables[i];
+                        if (!variable) {
+                            continue;
+                        }
+                        const value = numericMemory[variableSlots[i].slot];
+                        variable.value = value;
+                        if (variable.isCloud) {
+                            cloud.requestUpdateVariable(variable.name, value);
+                        }
+                    }
+                    if (requestedRedraw) {
+                        requestedRedraw = false;
+                        runtime.requestRedraw();
                     }
                     return {
                         done: status === 0

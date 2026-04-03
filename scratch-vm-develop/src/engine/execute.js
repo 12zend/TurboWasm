@@ -288,6 +288,17 @@ class BlockCached {
          */
         this._ops = [];
 
+        Object.defineProperties(this, {
+            _opsById: {
+                value: Object.create(null),
+                writable: true
+            },
+            _opIndexes: {
+                value: Object.create(null),
+                writable: true
+            }
+        });
+
         const {runtime} = blockUtility.sequencer;
 
         const {opcode, fields, inputs} = this;
@@ -384,6 +395,12 @@ class BlockCached {
         if (this._definedBlockFunction) {
             this._ops.push(this);
         }
+
+        for (let i = 0; i < this._ops.length; i++) {
+            const op = this._ops[i];
+            this._opsById[op.id] = op;
+            this._opIndexes[op.id] = i;
+        }
     }
 }
 
@@ -437,6 +454,8 @@ const execute = function (sequencer, thread) {
     }
 
     const ops = blockCached._ops;
+    const opsById = blockCached._opsById;
+    const opIndexes = blockCached._opIndexes;
     const length = ops.length;
     let i = 0;
 
@@ -445,8 +464,7 @@ const execute = function (sequencer, thread) {
         // Reinstate all the previous values.
         for (; i < reported.length; i++) {
             const {opCached: oldOpCached, inputValue} = reported[i];
-
-            const opCached = ops.find(op => op.id === oldOpCached);
+            const opCached = opsById[oldOpCached];
 
             if (opCached) {
                 const inputName = opCached._parentKey;
@@ -468,11 +486,13 @@ const execute = function (sequencer, thread) {
         // candidate. If an earlier block that was performed was removed then
         // we'll find the index where the last operation is now.
         if (reported.length > 0) {
-            const lastExisting = reported.reverse().find(report => ops.find(op => op.id === report.opCached));
-            if (lastExisting) {
-                i = ops.findIndex(opCached => opCached.id === lastExisting.opCached) + 1;
-            } else {
-                i = 0;
+            i = 0;
+            for (let r = reported.length - 1; r >= 0; r--) {
+                const opIndex = opIndexes[reported[r].opCached];
+                if (typeof opIndex !== 'undefined') {
+                    i = opIndex + 1;
+                    break;
+                }
             }
         }
 
@@ -541,21 +561,25 @@ const execute = function (sequencer, thread) {
             // that time.
             thread.justReported = null;
             currentStackFrame.reporting = ops[i].id;
-            currentStackFrame.reported = ops.slice(0, i).map(reportedCached => {
+            const reportedValues = new Array(i);
+            for (let r = 0; r < i; r++) {
+                const reportedCached = ops[r];
                 const inputName = reportedCached._parentKey;
-                const reportedValues = reportedCached._parentValues;
+                const parentValues = reportedCached._parentValues;
 
                 if (inputName === 'BROADCAST_INPUT') {
-                    return {
+                    reportedValues[r] = {
                         opCached: reportedCached.id,
-                        inputValue: reportedValues[inputName].BROADCAST_OPTION.name
+                        inputValue: parentValues.BROADCAST_OPTION.name
                     };
+                    continue;
                 }
-                return {
+                reportedValues[r] = {
                     opCached: reportedCached.id,
-                    inputValue: reportedValues[inputName]
+                    inputValue: parentValues[inputName]
                 };
-            });
+            }
+            currentStackFrame.reported = reportedValues;
 
             // We are waiting to be resumed later. Stop running this set of operations
             // and continue them later after thawing the reported values.
