@@ -424,6 +424,13 @@ test('compile reuses prebuilt wasm modules and syncs variables back to the threa
 
     const compiled = await compile(makeThread(firstVariable));
     t.equal(wasmCompileCount, 0);
+    t.same(compiled.compilationStats, {
+        entryFormat: 'wasm',
+        procedureFormats: {},
+        scriptCount: 1,
+        wasmScriptCount: 1,
+        jsScriptCount: 0
+    });
 
     const firstGenerator = compiled.startingFunction(makeThread(firstVariable))();
     t.same(firstGenerator.next(), {done: true});
@@ -524,4 +531,13 @@ test('compile batches entry and procedures into one worker request', async t => 
     t.equal(batch.length, 2);
     t.type(compiled.startingFunction, 'function');
     t.type(compiled.procedures.procedureVariant, 'function');
+    t.same(compiled.compilationStats, {
+        entryFormat: 'wasm',
+        procedureFormats: {
+            procedureVariant: 'wasm'
+        },
+        scriptCount: 2,
+        wasmScriptCount: 2,
+        jsScriptCount: 0
+    });
 });

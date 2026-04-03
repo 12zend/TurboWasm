@@ -201,11 +201,11 @@ const runWasmKernel = () => {
             requestRedraw: () => {}
         }
     });
-    const counterOffset = wasmResult.variables[0].offset;
-    const view = new DataView(memory.buffer);
-    view.setFloat64(counterOffset, 0, true);
+    const counterSlot = wasmResult.variables[0].offset >>> 3;
+    const numericMemory = new Float64Array(memory.buffer);
+    numericMemory[counterSlot] = 0;
     instance.exports.run();
-    return view.getFloat64(counterOffset, true);
+    return numericMemory[counterSlot];
 };
 
 const jsSanity = runJsKernel();

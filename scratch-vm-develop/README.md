@@ -20,6 +20,27 @@ For a high-level overview of how the compiler works, see https://docs.turbowarp.
 
 For more technical information, read the code in src/compiler.
 
+## TurboWasm Web Demo
+
+Build the browser bundles:
+
+```bash
+npm run build
+```
+
+Then serve the generated playground directory, for example:
+
+```bash
+python3 -m http.server 8074 -d playground
+```
+
+Open `http://localhost:8074/` to load the TurboWasm playground. The page:
+
+- boots the VM with `useWasm: true`
+- loads a bundled Pen demo project by default
+- shows asset progress, compile status, runtime state, and thread count
+- includes a synthetic JS-vs-WASM kernel benchmark
+
 ## Public API
 
 This section was too out of date to be useful. We hope to re-add it as some point.

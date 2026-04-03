@@ -177,6 +177,12 @@ module.exports = [
             }, {
                 from: 'node_modules/@turbowarp/scratch-svg-renderer/dist/web'
             }, {
+                from: 'test/fixtures/load-extensions/confirm-load/pen-simple-project.sb3',
+                to: 'fixtures/pen-simple-project.sb3'
+            }, {
+                from: 'test/fixtures/load-extensions/confirm-load/pen-dolphin-3d.sb3',
+                to: 'fixtures/pen-dolphin-3d.sb3'
+            }, {
                 from: 'src/playground'
             }])
         ])

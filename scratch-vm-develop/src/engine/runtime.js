@@ -685,6 +685,10 @@ class Runtime extends EventEmitter {
         return 'ASSET_PROGRESS';
     }
 
+    static get TURBOWASM_STATUS () {
+        return 'TURBOWASM_STATUS';
+    }
+
     /**
      * Event name when the project is started (threads may not necessarily be
      * running).
@@ -2068,6 +2072,10 @@ class Runtime extends EventEmitter {
 
     emitCompileError (target, error) {
         this.emit(Runtime.COMPILE_ERROR, target, error);
+    }
+
+    emitTurboWasmStatus (status) {
+        this.emit(Runtime.TURBOWASM_STATUS, status);
     }
 
     /**

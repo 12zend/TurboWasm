@@ -525,6 +525,13 @@ class Thread {
             this.procedures[procedureCode] = result.procedures[procedureCode](this);
         }
 
+        if (result.compilationStats) {
+            this.target.runtime.emitTurboWasmStatus(Object.assign({}, result.compilationStats, {
+                targetName: this.target.getName(),
+                topBlockId: this.topBlock
+            }));
+        }
+
         this.generator = result.startingFunction(this)();
         this.executableHat = result.executableHat;
 

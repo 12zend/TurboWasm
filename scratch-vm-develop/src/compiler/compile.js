@@ -13,7 +13,44 @@ const wasmModuleCache = typeof WeakMap === 'function' ? new WeakMap() : null;
  * @property {Function} startingFunction
  * @property {Object.<string, Function>} procedures
  * @property {boolean} executableHat
+ * @property {object} compilationStats
  */
+
+/**
+ * @param {Array<object>} results
+ * @param {Array<string>} procedureVariants
+ * @returns {object}
+ */
+const summarizeCompilation = (results, procedureVariants) => {
+    const procedureFormats = {};
+    let wasmScriptCount = 0;
+    let jsScriptCount = 0;
+
+    const incrementFormat = format => {
+        if (format === 'wasm') {
+            wasmScriptCount++;
+        } else {
+            jsScriptCount++;
+        }
+    };
+
+    const entryFormat = results[0] ? results[0].format : 'js';
+    incrementFormat(entryFormat);
+
+    for (let i = 0; i < procedureVariants.length; i++) {
+        const format = results[i + 1] ? results[i + 1].format : 'js';
+        procedureFormats[procedureVariants[i]] = format;
+        incrementFormat(format);
+    }
+
+    return {
+        entryFormat,
+        procedureFormats,
+        scriptCount: results.length,
+        wasmScriptCount,
+        jsScriptCount
+    };
+};
 
 /**
  * @param {import("../engine/thread")} thread
@@ -87,6 +124,10 @@ const compile = thread => {
     const createWasmFactory = async data => {
         const module = await loadWasmModule(data);
         const variables = data.variables || [];
+        const variableSlots = variables.map(variableInfo => ({
+            id: variableInfo.id,
+            slot: variableInfo.offset >>> 3
+        }));
         return runtimeThread => () => {
             const memory = new WebAssembly.Memory({initial: 1});
             const instance = new WebAssembly.Instance(module, {
@@ -97,20 +138,20 @@ const compile = thread => {
                     }
                 }
             });
-            const view = new DataView(memory.buffer);
+            const numericMemory = variableSlots.length > 0 ? new Float64Array(memory.buffer) : null;
 
-            for (const variableInfo of variables) {
-                view.setFloat64(variableInfo.offset, readVariable(runtimeThread, variableInfo), true);
+            for (const variableInfo of variableSlots) {
+                numericMemory[variableInfo.slot] = readVariable(runtimeThread, variableInfo);
             }
 
             return {
                 next: () => {
                     const status = instance.exports.run();
-                    for (const variableInfo of variables) {
+                    for (const variableInfo of variableSlots) {
                         writeVariable(
                             runtimeThread,
                             variableInfo,
-                            view.getFloat64(variableInfo.offset, true)
+                            numericMemory[variableInfo.slot]
                         );
                     }
                     return {
@@ -155,8 +196,11 @@ const compile = thread => {
     ];
 
     return compileTasks(tasks)
-        .then(results => Promise.all(results.map(createFactory)))
-        .then(([entry, ...compiledProcedures]) => {
+        .then(results => Promise.all([
+            Promise.resolve(summarizeCompilation(results, procedureVariants)),
+            Promise.all(results.map(createFactory))
+        ]))
+        .then(([compilationStats, [entry, ...compiledProcedures]]) => {
             const procedures = {};
             for (let i = 0; i < procedureVariants.length; i++) {
                 procedures[procedureVariants[i]] = compiledProcedures[i];
@@ -165,7 +209,8 @@ const compile = thread => {
             return {
                 startingFunction: entry,
                 procedures,
-                executableHat: ir.entry.executableHat
+                executableHat: ir.entry.executableHat,
+                compilationStats
             };
         });
 };
