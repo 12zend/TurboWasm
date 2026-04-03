@@ -203,6 +203,50 @@ test('compileTask emits executable wasm for supported numeric kernels', t => {
     t.end();
 });
 
+test('compileTask emits wasm for straight-line entry scripts even when IR marks them as yielding', t => {
+    const ir = makeSupportedIR();
+    ir.entry.yields = true;
+
+    const result = compileTask({
+        script: ir.entry,
+        ir,
+        targetData: {
+            name: 'Sprite1',
+            debug: false,
+            isStage: false,
+            effects: {}
+        },
+        useWasm: true
+    });
+
+    t.equal(result.format, 'wasm');
+    t.same(result.variables, [{id: 'var1', offset: 1024}]);
+    t.type(result.wasmModule, WebAssembly.Module);
+    t.end();
+});
+
+test('compileTask rehydrates worker-cloned IR objects before compiling', t => {
+    const ir = makeSupportedIR();
+    const clonedTask = JSON.parse(JSON.stringify({
+        script: ir.entry,
+        ir,
+        targetData: {
+            name: 'Sprite1',
+            debug: false,
+            isStage: false,
+            effects: {}
+        },
+        useWasm: true
+    }));
+
+    const result = compileTask(clonedTask);
+
+    t.equal(result.format, 'wasm');
+    t.same(result.variables, [{id: 'var1', offset: 1024}]);
+    t.type(result.wasmModule, WebAssembly.Module);
+    t.end();
+});
+
 test('compileTask emits executable wasm for supported control flow kernels', t => {
     const ir = makeSupportedControlFlowIR();
     const result = compileTask({

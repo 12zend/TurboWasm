@@ -219,8 +219,8 @@ class WasmGenerator {
 
     supportsScript () {
         return Boolean(this.script.stack) &&
-            !this.script.yields &&
             !this.script.isProcedure &&
+            !this.script.executableHat &&
             this.supportsStack(this.script.stack);
     }
 

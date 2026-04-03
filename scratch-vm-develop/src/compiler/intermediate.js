@@ -385,11 +385,139 @@ class IntermediateRepresentation {
     }
 }
 
+const setInstancePrototype = (value, constructor) => {
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+    if (!(value instanceof constructor)) {
+        Object.setPrototypeOf(value, constructor.prototype);
+    }
+    return value;
+};
+
+const hydrateIntermediateValue = value => {
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            hydrateIntermediateValue(item);
+        }
+        return value;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(value, 'opcode') &&
+        Object.prototype.hasOwnProperty.call(value, 'type')) {
+        return hydrateIntermediateInput(value);
+    }
+
+    if (Array.isArray(value.blocks)) {
+        return hydrateIntermediateStack(value);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(value, 'opcode') &&
+        Object.prototype.hasOwnProperty.call(value, 'inputs') &&
+        Object.prototype.hasOwnProperty.call(value, 'yields')) {
+        return hydrateIntermediateStackBlock(value);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(value, 'stack') &&
+        Object.prototype.hasOwnProperty.call(value, 'arguments') &&
+        Object.prototype.hasOwnProperty.call(value, 'isProcedure')) {
+        return hydrateIntermediateScript(value);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(value, 'entry') &&
+        Object.prototype.hasOwnProperty.call(value, 'procedures')) {
+        return hydrateIntermediateRepresentation(value);
+    }
+
+    for (const propertyName in value) {
+        hydrateIntermediateValue(value[propertyName]);
+    }
+
+    return value;
+};
+
+const hydrateIntermediateInput = input => {
+    if (!input || typeof input !== 'object') {
+        return input;
+    }
+
+    setInstancePrototype(input, IntermediateInput);
+
+    for (const inputName in input.inputs) {
+        hydrateIntermediateValue(input.inputs[inputName]);
+    }
+
+    return input;
+};
+
+const hydrateIntermediateStackBlock = block => {
+    if (!block || typeof block !== 'object') {
+        return block;
+    }
+
+    setInstancePrototype(block, IntermediateStackBlock);
+
+    for (const inputName in block.inputs) {
+        hydrateIntermediateValue(block.inputs[inputName]);
+    }
+
+    return block;
+};
+
+const hydrateIntermediateStack = stack => {
+    if (!stack || typeof stack !== 'object') {
+        return stack;
+    }
+
+    setInstancePrototype(stack, IntermediateStack);
+
+    if (Array.isArray(stack.blocks)) {
+        for (const block of stack.blocks) {
+            hydrateIntermediateStackBlock(block);
+        }
+    }
+
+    return stack;
+};
+
+const hydrateIntermediateScript = script => {
+    if (!script || typeof script !== 'object') {
+        return script;
+    }
+
+    setInstancePrototype(script, IntermediateScript);
+    hydrateIntermediateStack(script.stack);
+    return script;
+};
+
+const hydrateIntermediateRepresentation = ir => {
+    if (!ir || typeof ir !== 'object') {
+        return ir;
+    }
+
+    setInstancePrototype(ir, IntermediateRepresentation);
+    hydrateIntermediateScript(ir.entry);
+
+    for (const procedureVariant in ir.procedures) {
+        hydrateIntermediateScript(ir.procedures[procedureVariant]);
+    }
+
+    return ir;
+};
+
 module.exports = {
     IntermediateStackBlock,
     IntermediateInput,
     IntermediateStack,
     IntermediateScript,
     IntermediateRepresentation,
+    hydrateIntermediateInput,
+    hydrateIntermediateStack,
+    hydrateIntermediateScript,
+    hydrateIntermediateRepresentation,
     stringifyType
 };

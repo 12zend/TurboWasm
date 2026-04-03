@@ -77,6 +77,7 @@ module.exports = [
             'dist/compiler-worker': './src/compiler/compiler-worker.js'
         },
         output: {
+            globalObject: 'self',
             libraryTarget: 'umd',
             path: path.resolve('dist', 'web')
         },
@@ -182,6 +183,12 @@ module.exports = [
             }, {
                 from: 'test/fixtures/load-extensions/confirm-load/pen-dolphin-3d.sb3',
                 to: 'fixtures/pen-dolphin-3d.sb3'
+            }, {
+                from: 'dist/web/dist/compiler-worker.js',
+                to: 'dist/compiler-worker.js'
+            }, {
+                from: 'dist/web/dist/compiler-worker.js.map',
+                to: 'dist/compiler-worker.js.map'
             }, {
                 from: 'src/playground'
             }])

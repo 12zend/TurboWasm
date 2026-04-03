@@ -615,6 +615,16 @@ const restoreGlobalState = () => {
     globalState.thread = threadStack.pop();
 };
 
+const withThread = (thread, callback) => {
+    saveGlobalState();
+    globalState.thread = thread;
+    try {
+        return callback();
+    } finally {
+        restoreGlobalState();
+    }
+};
+
 const insertRuntime = source => {
     let result = baseRuntime;
     for (const functionName of Object.keys(runtimeFunctions)) {
@@ -645,5 +655,6 @@ execute.scopedEval = scopedEval;
 execute.runtimeFunctions = runtimeFunctions;
 execute.saveGlobalState = saveGlobalState;
 execute.restoreGlobalState = restoreGlobalState;
+execute.withThread = withThread;
 
 module.exports = execute;

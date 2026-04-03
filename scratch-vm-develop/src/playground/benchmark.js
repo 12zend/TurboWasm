@@ -23,9 +23,9 @@ const PROJECT_TOKEN_SERVER = 'https://trampoline.turbowarp.org/api/projects/';
 
 const DEMO_PROJECTS = {
     'pen': {
-        label: 'Pen Simple',
-        url: './fixtures/pen-simple-project.sb3',
-        notes: 'Bundled local demo focused on Pen startup correctness.'
+        label: 'TurboWasm Pen Demo',
+        url: './fixtures/turbowasm-pen-demo.sb3',
+        notes: 'Bundled local demo with a live Pen loop plus a numeric kernel that exercises the WASM compiler path.'
     },
     'pen-heavy': {
         label: 'Pen Dolphin 3D',
@@ -529,7 +529,7 @@ const runKernelBenchmark = () => {
                 isCloud: false
             };
             const thread = makeBenchmarkThread(variable);
-            jsFactory(thread)();
+            jsexecute.withThread(thread, () => jsFactory(thread)());
             return variable.value;
         };
 

@@ -3,6 +3,10 @@
 const JSGenerator = require('./jsgen');
 const WasmGenerator = require('./wasmgen');
 const {createWasmCompilationResult} = require('./wasm-result');
+const {
+    hydrateIntermediateRepresentation,
+    hydrateIntermediateScript
+} = require('./intermediate');
 
 class MockTarget {
     constructor (data) {
@@ -25,7 +29,9 @@ class MockTarget {
  * @returns {object}
  */
 const compileTask = task => {
-    const {script, ir, targetData, useWasm} = task;
+    const {targetData, useWasm} = task;
+    const ir = hydrateIntermediateRepresentation(task.ir);
+    const script = hydrateIntermediateScript(task.script);
     const target = new MockTarget(targetData);
 
     if (useWasm && typeof WebAssembly === 'object') {

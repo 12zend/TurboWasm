@@ -74,3 +74,18 @@ test('comparison functions are equivalent to Cast.compare', t => {
     }
     t.end();
 });
+
+test('withThread exposes the current thread only for the callback scope', t => {
+    const readMarker = jsexecute.scopedEval('(function () { return globalState.thread && globalState.thread.marker; })');
+    const outerThread = {marker: 'outer'};
+    const innerThread = {marker: 'inner'};
+
+    const result = jsexecute.withThread(outerThread, () => {
+        t.equal(readMarker(), 'outer');
+        return jsexecute.withThread(innerThread, () => readMarker());
+    });
+
+    t.equal(result, 'inner');
+    t.equal(readMarker(), null);
+    t.end();
+});
