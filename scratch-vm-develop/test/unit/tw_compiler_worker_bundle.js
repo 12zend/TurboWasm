@@ -28,7 +28,8 @@ test('playground build copies compiler-worker next to benchmark.js', t => {
     const webpackConfigPath = path.resolve(__dirname, '../../webpack.config.js');
     const webpackConfigSource = fs.readFileSync(webpackConfigPath, 'utf8');
 
-    t.match(webpackConfigSource, /from: 'dist\/web\/dist\/compiler-worker\.js'/);
-    t.match(webpackConfigSource, /to: 'dist\/compiler-worker\.js'/);
+    t.match(webpackConfigSource, /from: path\.posix\.join\('dist', 'web', compilerWorkerAsset\)/);
+    t.match(webpackConfigSource, /to: compilerWorkerAsset/);
+    t.notMatch(webpackConfigSource, /compiler-worker\.js\.map/);
     t.end();
 });

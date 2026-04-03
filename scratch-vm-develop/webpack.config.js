@@ -3,6 +3,7 @@ const defaultsDeep = require('lodash.defaultsdeep');
 const path = require('path');
 
 const isBuild = process.env.npm_lifecycle_event === 'build';
+const compilerWorkerAsset = 'dist/compiler-worker.js';
 
 class DuplicateAssetPlugin {
     constructor (from, to) {
@@ -74,7 +75,7 @@ module.exports = [
         target: 'web',
         entry: {
             'scratch-vm': './src/index.js',
-            'dist/compiler-worker': './src/compiler/compiler-worker.js'
+            [compilerWorkerAsset.replace(/\.js$/, '')]: './src/compiler/compiler-worker.js'
         },
         output: {
             globalObject: 'self',
@@ -184,11 +185,8 @@ module.exports = [
                 from: 'test/fixtures/load-extensions/confirm-load/pen-dolphin-3d.sb3',
                 to: 'fixtures/pen-dolphin-3d.sb3'
             }, {
-                from: 'dist/web/dist/compiler-worker.js',
-                to: 'dist/compiler-worker.js'
-            }, {
-                from: 'dist/web/dist/compiler-worker.js.map',
-                to: 'dist/compiler-worker.js.map'
+                from: path.posix.join('dist', 'web', compilerWorkerAsset),
+                to: compilerWorkerAsset
             }, {
                 from: 'src/playground'
             }])
