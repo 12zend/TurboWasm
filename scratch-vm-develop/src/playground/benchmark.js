@@ -15,6 +15,7 @@ const runBtn = document.getElementById('run-btn');
 const stopBtn = document.getElementById('stop-btn');
 const importBtn = document.getElementById('import-sb3');
 const fileInput = document.getElementById('file-input');
+let currentProjectId = null;
 
 // Initialize VM
 const vm = new VirtualMachine();
@@ -22,7 +23,8 @@ Scratch.vm = vm;
 
 // Stage 3: Always enable compiler and turbo mode
 vm.setCompilerOptions({
-    enabled: true
+    enabled: true,
+    useWasm: true
 });
 vm.setTurboMode(true);
 
@@ -37,16 +39,14 @@ storage.addWebSource([AssetType.Project], asset => {
     }
     return assetUrlParts.join('');
 });
-storage.addWebSource([AssetType.ImageVector, AssetType.ImageBitmap, AssetType.Sound], asset => {
-    return [
-        ASSET_SERVER,
-        'internalapi/asset/',
-        asset.assetId,
-        '.',
-        asset.dataFormat,
-        '/get/'
-    ].join('');
-});
+storage.addWebSource([AssetType.ImageVector, AssetType.ImageBitmap, AssetType.Sound], asset => [
+    ASSET_SERVER,
+    'internalapi/asset/',
+    asset.assetId,
+    '.',
+    asset.dataFormat,
+    '/get/'
+].join(''));
 vm.attachStorage(storage);
 
 // Initialize renderer
@@ -133,7 +133,7 @@ stopBtn.addEventListener('click', () => {
 const getProjectMetadata = async projectId => {
     const response = await fetch(`https://trampoline.turbowarp.org/api/projects/${projectId}`);
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
-    return await response.json();
+    return response.json();
 };
 
 const getProjectData = async projectId => {
@@ -141,7 +141,12 @@ const getProjectData = async projectId => {
     const token = metadata.project_token;
     const response = await fetch(`https://projects.scratch.mit.edu/${projectId}?token=${token}`);
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
-    return await response.arrayBuffer();
+    return response.arrayBuffer();
+};
+
+const reportLoadFailure = error => {
+    console.error('Failed to load project:', error);
+    fpsValue.innerText = 'ERR';
 };
 
 const loadProjectById = async id => {
@@ -150,8 +155,7 @@ const loadProjectById = async id => {
         await vm.loadProject(data);
         vm.greenFlag();
     } catch (e) {
-        console.error('Failed to load project:', e);
-        alert('Failed to load project. It might be unshared or private.');
+        reportLoadFailure(e);
     }
 };
 
@@ -173,7 +177,6 @@ fileInput.addEventListener('change', e => {
 });
 
 // Initialization based on URL
-let currentProjectId = null;
 const init = async () => {
     let projectId = location.hash.substring(1).split(',')[0];
     if (!projectId) {

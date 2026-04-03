@@ -2,6 +2,7 @@
 
 const JSGenerator = require('./jsgen');
 const WasmGenerator = require('./wasmgen');
+const {createWasmCompilationResult} = require('./wasm-result');
 
 class MockTarget {
     constructor (data) {
@@ -31,7 +32,7 @@ const compileTask = task => {
         try {
             const wasmCompiler = new WasmGenerator(script, ir, target);
             if (wasmCompiler.supportsScript()) {
-                return wasmCompiler.compile();
+                return createWasmCompilationResult(wasmCompiler.compile());
             }
         } catch (e) {
             // Fall through to JS when the WASM path rejects a script.

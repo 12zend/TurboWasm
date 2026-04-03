@@ -6,22 +6,48 @@
 
 const {compileTask} = require('./compile-task');
 
-let CompilerWorker = null;
-try {
-    CompilerWorker = require('worker-loader?name=dist/compiler-worker.js!./compiler-worker');
-} catch (e) {
-    CompilerWorker = null;
-}
+const getBundleScriptURL = () => {
+    if (typeof document === 'undefined') {
+        return null;
+    }
+
+    if (document.currentScript && document.currentScript.src) {
+        return document.currentScript.src;
+    }
+
+    const scripts = document.getElementsByTagName('script');
+    const lastScript = scripts[scripts.length - 1];
+    if (lastScript && lastScript.src) {
+        return lastScript.src;
+    }
+
+    return null;
+};
+
+const getCompilerWorkerURL = () => {
+    const bundleScriptURL = getBundleScriptURL();
+    if (bundleScriptURL) {
+        return new URL('dist/compiler-worker.js', bundleScriptURL).toString();
+    }
+
+    if (typeof location !== 'undefined' && location.href) {
+        return new URL('dist/compiler-worker.js', location.href).toString();
+    }
+
+    return null;
+};
 
 class CompilerWorkerProxy {
     constructor () {
         this.workers = [];
         this.idleWorkers = [];
         this.queue = [];
+        this.compilerWorkerURL = getCompilerWorkerURL();
         this.canUseWorkers = Boolean(
-            CompilerWorker &&
+            typeof Worker === 'function' &&
             typeof navigator !== 'undefined' &&
-            typeof Promise === 'function'
+            typeof Promise === 'function' &&
+            this.compilerWorkerURL
         );
 
         if (!this.canUseWorkers) {
@@ -30,10 +56,16 @@ class CompilerWorkerProxy {
 
         this.workerCount = Math.min(4, navigator.hardwareConcurrency || 2);
 
-        for (let i = 0; i < this.workerCount; i++) {
-            const worker = new CompilerWorker();
-            this.workers.push(worker);
-            this.idleWorkers.push(worker);
+        try {
+            for (let i = 0; i < this.workerCount; i++) {
+                const worker = new Worker(this.compilerWorkerURL);
+                this.workers.push(worker);
+                this.idleWorkers.push(worker);
+            }
+        } catch (e) {
+            this.workers = [];
+            this.idleWorkers = [];
+            this.canUseWorkers = false;
         }
     }
 
@@ -42,12 +74,33 @@ class CompilerWorkerProxy {
      * @returns {Promise<Object>}
      */
     compile (data) {
+        return this._dispatch(data);
+    }
+
+    /**
+     * @param {Array<Object>} tasks
+     * @returns {Promise<Array<Object>>}
+     */
+    compileTasks (tasks) {
+        return this._dispatch({tasks});
+    }
+
+    /**
+     * @param {Object} payload
+     * @returns {Promise<Object>|Promise<Array<Object>>}
+     */
+    _dispatch (payload) {
         if (!this.canUseWorkers) {
-            return Promise.resolve().then(() => compileTask(data));
+            return Promise.resolve().then(() => {
+                if (Array.isArray(payload.tasks)) {
+                    return payload.tasks.map(task => compileTask(task));
+                }
+                return compileTask(payload);
+            });
         }
 
         return new Promise((resolve, reject) => {
-            this.queue.push({data, resolve, reject});
+            this.queue.push({payload, resolve, reject});
             this.processQueue();
         });
     }
@@ -57,7 +110,7 @@ class CompilerWorkerProxy {
             return;
         }
 
-        const {data, resolve, reject} = this.queue.shift();
+        const {payload, resolve, reject} = this.queue.shift();
         const worker = this.idleWorkers.shift();
         const proxy = this;
         const listeners = {};
@@ -84,7 +137,7 @@ class CompilerWorkerProxy {
 
         worker.addEventListener('message', listeners.message);
         worker.addEventListener('error', listeners.error);
-        worker.postMessage(data);
+        worker.postMessage(payload);
     }
 }
 

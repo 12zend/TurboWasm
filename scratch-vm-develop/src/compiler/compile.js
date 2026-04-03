@@ -6,6 +6,8 @@ const compilerWorkerProxy = require('./compiler-worker-proxy');
 const jsexecute = require('./jsexecute');
 const Cast = require('../util/cast');
 
+const wasmModuleCache = typeof WeakMap === 'function' ? new WeakMap() : null;
+
 /**
  * @typedef {Object} CompiledScript
  * @property {Function} startingFunction
@@ -53,8 +55,37 @@ const compile = thread => {
         }
     };
 
+    const getWasmModuleCacheKey = data => {
+        if (!data.wasmBytes) {
+            return null;
+        }
+        if (data.wasmBytes instanceof ArrayBuffer) {
+            return data.wasmBytes;
+        }
+        return data.wasmBytes.buffer || null;
+    };
+
+    const loadWasmModule = data => {
+        if (data.wasmModule) {
+            return Promise.resolve(data.wasmModule);
+        }
+        if (data.wasmBytes) {
+            const cacheKey = getWasmModuleCacheKey(data);
+            if (wasmModuleCache && cacheKey) {
+                let cachedModule = wasmModuleCache.get(cacheKey);
+                if (!cachedModule) {
+                    cachedModule = WebAssembly.compile(data.wasmBytes);
+                    wasmModuleCache.set(cacheKey, cachedModule);
+                }
+                return cachedModule;
+            }
+            return WebAssembly.compile(data.wasmBytes);
+        }
+        return Promise.reject(new Error('Missing WASM module and bytes'));
+    };
+
     const createWasmFactory = async data => {
-        const module = await WebAssembly.compile(data.wasmBytes);
+        const module = await loadWasmModule(data);
         const variables = data.variables || [];
         return runtimeThread => () => {
             const memory = new WebAssembly.Memory({initial: 1});
@@ -100,31 +131,43 @@ const compile = thread => {
         throw new Error(`Invalid worker result format: ${data.format}`);
     };
 
-    const compileScript = script => compilerWorkerProxy
-        .compile({
-            script,
+    const compileTasks = tasks => {
+        if (typeof compilerWorkerProxy.compileTasks === 'function') {
+            return compilerWorkerProxy.compileTasks(tasks);
+        }
+        return Promise.all(tasks.map(task => compilerWorkerProxy.compile(task)));
+    };
+
+    const procedureVariants = Object.keys(ir.procedures);
+    const tasks = [
+        {
+            script: ir.entry,
             ir,
             targetData,
             useWasm
-        })
-        .then(createFactory);
+        },
+        ...procedureVariants.map(procedureVariant => ({
+            script: ir.procedures[procedureVariant],
+            ir,
+            targetData,
+            useWasm
+        }))
+    ];
 
-    return Promise.all([
-        compileScript(ir.entry),
-        Promise.all(Object.keys(ir.procedures).map(procedureVariant => compileScript(ir.procedures[procedureVariant])))
-    ]).then(([entry, compiledProcedures]) => {
-        const procedures = {};
-        const procedureVariants = Object.keys(ir.procedures);
-        for (let i = 0; i < procedureVariants.length; i++) {
-            procedures[procedureVariants[i]] = compiledProcedures[i];
-        }
+    return compileTasks(tasks)
+        .then(results => Promise.all(results.map(createFactory)))
+        .then(([entry, ...compiledProcedures]) => {
+            const procedures = {};
+            for (let i = 0; i < procedureVariants.length; i++) {
+                procedures[procedureVariants[i]] = compiledProcedures[i];
+            }
 
-        return {
-            startingFunction: entry,
-            procedures,
-            executableHat: ir.entry.executableHat
-        };
-    });
+            return {
+                startingFunction: entry,
+                procedures,
+                executableHat: ir.entry.executableHat
+            };
+        });
 };
 
 module.exports = compile;

@@ -1,15 +1,12 @@
 // @ts-check
 
-const {StackOpcode, InputOpcode} = require('./enums.js');
+const {StackOpcode, InputOpcode, InputType} = require('./enums.js');
 
 /**
  * @fileoverview Convert intermediate representations to WebAssembly binaries.
  */
 
-// Wasm Opcodes
 const Op = {
-    unreachable: 0x00,
-    nop: 0x01,
     block: 0x02,
     loop: 0x03,
     if: 0x04,
@@ -18,59 +15,44 @@ const Op = {
     br: 0x0c,
     br_if: 0x0d,
     return: 0x0f,
-    call: 0x10,
-    drop: 0x1a,
-    select: 0x1b,
     local_get: 0x20,
     local_set: 0x21,
     local_tee: 0x22,
-    global_get: 0x23,
-    global_set: 0x24,
     i32_load: 0x28,
     f64_load: 0x2b,
     i32_store: 0x36,
     f64_store: 0x39,
     i32_const: 0x41,
-    i64_const: 0x42,
-    f32_const: 0x43,
     f64_const: 0x44,
+    i32_eqz: 0x45,
     f64_eq: 0x61,
     f64_ne: 0x62,
     f64_lt: 0x63,
     f64_gt: 0x64,
-    f64_le: 0x65,
-    f64_ge: 0x66,
     f64_add: 0xa0,
     f64_sub: 0xa1,
     f64_mul: 0xa2,
     f64_div: 0xa3,
-    i32_add: 0x6a,
-    br_table: 0x0e
+    i32_sub: 0x6b,
+    i32_and: 0x71,
+    i32_or: 0x72,
+    f64_convert_i32_s: 0xb7
 };
 
-// Section IDs
 const Section = {
     type: 1,
     import: 2,
     function: 3,
-    table: 4,
-    memory: 5,
-    global: 6,
     export: 7,
-    start: 8,
-    element: 9,
-    code: 10,
-    data: 11
+    code: 10
 };
 
-// Value Types
 const ValType = {
     i32: 0x7f,
     f64: 0x7c
 };
 
 /**
- * Encodes a LEB128 unsigned integer.
  * @param {number} n
  * @returns {number[]}
  */
@@ -88,14 +70,25 @@ const encodeU32 = n => {
 };
 
 /**
- * Encodes a floating point number.
  * @param {number} n
  * @returns {Uint8Array}
  */
 const encodeF64 = n => {
-    const buf = new ArrayBuffer(8);
-    new DataView(buf).setFloat64(0, n, true);
-    return new Uint8Array(buf);
+    const buffer = new ArrayBuffer(8);
+    new DataView(buffer).setFloat64(0, n, true);
+    return new Uint8Array(buffer);
+};
+
+/**
+ * @param {string} value
+ * @returns {number[]}
+ */
+const encodeName = value => {
+    const bytes = [];
+    for (let i = 0; i < value.length; i++) {
+        bytes.push(value.charCodeAt(i));
+    }
+    return [...encodeU32(bytes.length), ...bytes];
 };
 
 class WasmGenerator {
@@ -108,46 +101,85 @@ class WasmGenerator {
         this.script = script;
         this.ir = ir;
         this.target = target;
-        
+
         /** @type {number[]} */
         this.code = [];
-        
+
         /** @type {Map<string, number>} */
         this.variablesMap = new Map();
-        
+
+        /** @type {Map<string, number>} */
+        this.variableLocalMap = new Map();
+
         /** @type {number[]} */
-        this.yieldPoints = []; // Positions for br_table
-        this.currentState = 0;
-        
-        // Memory offset for thread state
+        this.locals = [];
+
         this.stateOffset = 0;
-        // Memory offset for variables
         this.variableBaseOffset = 1024;
     }
 
-    supportsInput (input) {
+    /**
+     * @param {import("./intermediate").IntermediateInput} input
+     * @returns {boolean}
+     */
+    supportsNumericInput (input) {
         switch (input.opcode) {
         case InputOpcode.CONSTANT:
+            return typeof input.inputs.value === 'number' || typeof input.inputs.value === 'boolean';
         case InputOpcode.VAR_GET:
             return true;
-
         case InputOpcode.CAST_NUMBER:
         case InputOpcode.CAST_NUMBER_OR_NAN:
         case InputOpcode.CAST_NUMBER_INDEX:
-            return this.supportsInput(input.inputs.target);
-
+            return this.supportsNumericInput(input.inputs.target) || this.supportsBooleanInput(input.inputs.target);
+        case InputOpcode.CAST_BOOLEAN:
+            return this.supportsBooleanInput(input.inputs.target);
         case InputOpcode.OP_ADD:
         case InputOpcode.OP_SUBTRACT:
         case InputOpcode.OP_MULTIPLY:
         case InputOpcode.OP_DIVIDE:
+            return this.supportsNumericInput(input.inputs.left) && this.supportsNumericInput(input.inputs.right);
         case InputOpcode.OP_LESS:
-            return this.supportsInput(input.inputs.left) && this.supportsInput(input.inputs.right);
-
+        case InputOpcode.OP_GREATER:
+        case InputOpcode.OP_EQUALS:
+        case InputOpcode.OP_AND:
+        case InputOpcode.OP_OR:
+        case InputOpcode.OP_NOT:
+            return this.supportsBooleanInput(input);
         default:
             return false;
         }
     }
 
+    /**
+     * @param {import("./intermediate").IntermediateInput} input
+     * @returns {boolean}
+     */
+    supportsBooleanInput (input) {
+        switch (input.opcode) {
+        case InputOpcode.CONSTANT:
+            return typeof input.inputs.value === 'boolean' || typeof input.inputs.value === 'number';
+        case InputOpcode.CAST_BOOLEAN:
+            return this.supportsNumericInput(input.inputs.target) || this.supportsBooleanInput(input.inputs.target);
+        case InputOpcode.OP_AND:
+        case InputOpcode.OP_OR:
+            return this.supportsBooleanInput(input.inputs.left) && this.supportsBooleanInput(input.inputs.right);
+        case InputOpcode.OP_NOT:
+            return this.supportsBooleanInput(input.inputs.operand);
+        case InputOpcode.OP_LESS:
+        case InputOpcode.OP_GREATER:
+        case InputOpcode.OP_EQUALS:
+            return this.supportsNumericInput(input.inputs.left) && this.supportsNumericInput(input.inputs.right);
+        default:
+            return this.supportsNumericInput(input) &&
+                input.isAlwaysType(InputType.NUMBER | InputType.NUMBER_OR_NAN | InputType.BOOLEAN);
+        }
+    }
+
+    /**
+     * @param {import("./intermediate").IntermediateStackBlock} block
+     * @returns {boolean}
+     */
     supportsStackedBlock (block) {
         if (block.yields) {
             return false;
@@ -155,17 +187,27 @@ class WasmGenerator {
 
         const node = block.inputs;
         switch (block.opcode) {
+        case StackOpcode.NOP:
+            return true;
         case StackOpcode.VAR_SET:
-            return this.supportsInput(node.value);
-
+            return this.supportsNumericInput(node.value);
         case StackOpcode.CONTROL_REPEAT:
-            return this.supportsInput(node.times) && this.supportsStack(node.do);
-
+            return this.supportsNumericInput(node.times) && this.supportsStack(node.do);
+        case StackOpcode.CONTROL_IF_ELSE:
+            return this.supportsBooleanInput(node.condition) &&
+                this.supportsStack(node.whenTrue) &&
+                this.supportsStack(node.whenFalse);
+        case StackOpcode.CONTROL_WHILE:
+            return this.supportsBooleanInput(node.condition) && this.supportsStack(node.do);
         default:
             return false;
         }
     }
 
+    /**
+     * @param {import("./intermediate").IntermediateStack} stack
+     * @returns {boolean}
+     */
     supportsStack (stack) {
         for (const block of stack.blocks) {
             if (!this.supportsStackedBlock(block)) {
@@ -176,11 +218,10 @@ class WasmGenerator {
     }
 
     supportsScript () {
-        return (
-            Boolean(this.script.stack) &&
+        return Boolean(this.script.stack) &&
             !this.script.yields &&
-            this.supportsStack(this.script.stack)
-        );
+            !this.script.isProcedure &&
+            this.supportsStack(this.script.stack);
     }
 
     /**
@@ -188,96 +229,308 @@ class WasmGenerator {
      */
     emit (bytes) {
         if (Array.isArray(bytes)) {
-            for (const b of bytes) this.code.push(b);
-        } else {
-            this.code.push(bytes);
+            this.code.push(...bytes);
+            return;
         }
+        this.code.push(bytes);
     }
 
     /**
-     * Generates a yield point.
+     * @param {number} type
+     * @returns {number}
      */
-    yieldPoint () {
-        const nextState = ++this.currentState;
-        
-        // Save state to memory
-        this.emit(Op.i32_const);
-        this.emit(encodeU32(this.stateOffset));
-        this.emit(Op.i32_const);
-        this.emit(encodeU32(nextState));
-        this.emit(Op.i32_store);
-        this.emit([0x02, 0x00]); // align 2, offset 0
-        
-        // Return 1 (STATUS_YIELD)
-        this.emit(Op.i32_const);
-        this.emit(encodeU32(1));
-        this.emit(Op.return);
-        
-        // Mark re-entry point
-        this.yieldPoints.push(this.code.length);
+    allocateLocal (type) {
+        const index = this.locals.length;
+        this.locals.push(type);
+        return index;
     }
 
     /**
-     * @param {import("./intermediate").IntermediateInput} block
+     * @param {number} value
      */
-    descendInput (block) {
-        const node = block.inputs;
-        switch (block.opcode) {
-        case InputOpcode.CONSTANT:
-            if (typeof node.value === 'number') {
-                this.emit(Op.f64_const);
-                this.emit(Array.from(encodeF64(node.value)));
-            } else {
-                this.emit(Op.f64_const);
-                this.emit(Array.from(encodeF64(node.value ? 1 : 0)));
-            }
-            break;
+    emitF64Const (value) {
+        this.emit(Op.f64_const);
+        this.emit(Array.from(encodeF64(value)));
+    }
 
+    /**
+     * @param {number} value
+     */
+    emitI32Const (value) {
+        this.emit(Op.i32_const);
+        this.emit(encodeU32(value));
+    }
+
+    /**
+     * @param {any} variable
+     * @returns {number}
+     */
+    getVariableOffset (variable) {
+        if (this.variablesMap.has(variable.id)) {
+            return this.variablesMap.get(variable.id);
+        }
+        const offset = this.variableBaseOffset + (this.variablesMap.size * 8);
+        this.variablesMap.set(variable.id, offset);
+        return offset;
+    }
+
+    /**
+     * @param {any} variable
+     * @returns {number}
+     */
+    getVariableLocal (variable) {
+        if (this.variableLocalMap.has(variable.id)) {
+            return this.variableLocalMap.get(variable.id);
+        }
+        const local = this.allocateLocal(ValType.f64);
+        this.variableLocalMap.set(variable.id, local);
+        return local;
+    }
+
+    /**
+     * @param {import("./intermediate").IntermediateInput} input
+     */
+    registerNumericInput (input) {
+        const node = input.inputs;
+        switch (input.opcode) {
+        case InputOpcode.VAR_GET:
+            this.getVariableOffset(node.variable);
+            this.getVariableLocal(node.variable);
+            return;
         case InputOpcode.CAST_NUMBER:
         case InputOpcode.CAST_NUMBER_OR_NAN:
         case InputOpcode.CAST_NUMBER_INDEX:
-            this.descendInput(node.target);
-            break;
+        case InputOpcode.CAST_BOOLEAN:
+            this.registerInput(node.target);
+            return;
+        case InputOpcode.OP_ADD:
+        case InputOpcode.OP_SUBTRACT:
+        case InputOpcode.OP_MULTIPLY:
+        case InputOpcode.OP_DIVIDE:
+        case InputOpcode.OP_AND:
+        case InputOpcode.OP_OR:
+        case InputOpcode.OP_EQUALS:
+        case InputOpcode.OP_GREATER:
+        case InputOpcode.OP_LESS:
+            this.registerInput(node.left);
+            this.registerInput(node.right);
+            return;
+        case InputOpcode.OP_NOT:
+            this.registerInput(node.operand);
+            return;
+        default:
+            return;
+        }
+    }
 
-        case InputOpcode.VAR_GET: {
-            const offset = this.getVariableOffset(node.variable);
-            this.emit(Op.i32_const);
-            this.emit(encodeU32(offset));
+    /**
+     * @param {import("./intermediate").IntermediateInput} input
+     */
+    registerInput (input) {
+        if (this.supportsBooleanInput(input) || this.supportsNumericInput(input)) {
+            this.registerNumericInput(input);
+        }
+    }
+
+    /**
+     * @param {import("./intermediate").IntermediateStackBlock} block
+     */
+    registerStackedBlock (block) {
+        const node = block.inputs;
+        switch (block.opcode) {
+        case StackOpcode.VAR_SET:
+            this.getVariableOffset(node.variable);
+            this.getVariableLocal(node.variable);
+            this.registerInput(node.value);
+            return;
+        case StackOpcode.CONTROL_REPEAT:
+            this.registerInput(node.times);
+            this.registerStack(node.do);
+            return;
+        case StackOpcode.CONTROL_IF_ELSE:
+            this.registerInput(node.condition);
+            this.registerStack(node.whenTrue);
+            this.registerStack(node.whenFalse);
+            return;
+        case StackOpcode.CONTROL_WHILE:
+            this.registerInput(node.condition);
+            this.registerStack(node.do);
+            return;
+        default:
+            return;
+        }
+    }
+
+    /**
+     * @param {import("./intermediate").IntermediateStack} stack
+     */
+    registerStack (stack) {
+        for (const block of stack.blocks) {
+            this.registerStackedBlock(block);
+        }
+    }
+
+    syncVariablesFromMemory () {
+        for (const [id, offset] of this.variablesMap.entries()) {
+            this.emitI32Const(offset);
             this.emit(Op.f64_load);
             this.emit([0x03, 0x00]);
+            this.emit(Op.local_set);
+            this.emit(encodeU32(this.variableLocalMap.get(id)));
+        }
+    }
+
+    syncVariablesToMemory () {
+        for (const [id, offset] of this.variablesMap.entries()) {
+            this.emitI32Const(offset);
+            this.emit(Op.local_get);
+            this.emit(encodeU32(this.variableLocalMap.get(id)));
+            this.emit(Op.f64_store);
+            this.emit([0x03, 0x00]);
+        }
+    }
+
+    /**
+     * @param {import("./intermediate").IntermediateInput} input
+     */
+    descendNumericInput (input) {
+        const node = input.inputs;
+        switch (input.opcode) {
+        case InputOpcode.CONSTANT:
+            this.emitF64Const(typeof node.value === 'number' ? node.value : (node.value ? 1 : 0));
+            break;
+        case InputOpcode.VAR_GET: {
+            this.emit(Op.local_get);
+            this.emit(encodeU32(this.getVariableLocal(node.variable)));
             break;
         }
-
+        case InputOpcode.CAST_NUMBER:
+        case InputOpcode.CAST_NUMBER_OR_NAN:
+        case InputOpcode.CAST_NUMBER_INDEX:
+            if (this.supportsNumericInput(node.target)) {
+                this.descendNumericInput(node.target);
+            } else {
+                this.descendBooleanAsNumber(node.target);
+            }
+            break;
+        case InputOpcode.CAST_BOOLEAN:
+            this.descendBooleanAsNumber(node.target);
+            break;
         case InputOpcode.OP_ADD:
-            this.descendInput(node.left);
-            this.descendInput(node.right);
+            this.descendNumericInput(node.left);
+            this.descendNumericInput(node.right);
             this.emit(Op.f64_add);
             break;
         case InputOpcode.OP_SUBTRACT:
-            this.descendInput(node.left);
-            this.descendInput(node.right);
+            this.descendNumericInput(node.left);
+            this.descendNumericInput(node.right);
             this.emit(Op.f64_sub);
             break;
         case InputOpcode.OP_MULTIPLY:
-            this.descendInput(node.left);
-            this.descendInput(node.right);
+            this.descendNumericInput(node.left);
+            this.descendNumericInput(node.right);
             this.emit(Op.f64_mul);
             break;
         case InputOpcode.OP_DIVIDE:
-            this.descendInput(node.left);
-            this.descendInput(node.right);
+            this.descendNumericInput(node.left);
+            this.descendNumericInput(node.right);
             this.emit(Op.f64_div);
             break;
-            
         case InputOpcode.OP_LESS:
-            this.descendInput(node.left);
-            this.descendInput(node.right);
-            this.emit(Op.f64_lt);
+        case InputOpcode.OP_GREATER:
+        case InputOpcode.OP_EQUALS:
+        case InputOpcode.OP_AND:
+        case InputOpcode.OP_OR:
+        case InputOpcode.OP_NOT:
+            this.descendBooleanAsNumber(input);
             break;
-
         default:
-            this.emit(Op.f64_const);
-            this.emit(Array.from(encodeF64(0)));
+            throw new Error(`Unsupported numeric input in WASM generator: ${input.opcode}`);
+        }
+    }
+
+    /**
+     * @param {import("./intermediate").IntermediateInput} input
+     */
+    descendBooleanAsNumber (input) {
+        this.descendCondition(input);
+        this.emit(Op.f64_convert_i32_s);
+    }
+
+    /**
+     * Convert a numeric stack value to a Scratch boolean.
+     * Scratch treats NaN as false, so we need both `value != 0` and `value === value`.
+     */
+    emitNumberTruthinessFromStack () {
+        const local = this.allocateLocal(ValType.f64);
+        this.emit(Op.local_tee);
+        this.emit(encodeU32(local));
+        this.emitF64Const(0);
+        this.emit(Op.f64_ne);
+        this.emit(Op.local_get);
+        this.emit(encodeU32(local));
+        this.emit(Op.local_get);
+        this.emit(encodeU32(local));
+        this.emit(Op.f64_eq);
+        this.emit(Op.i32_and);
+    }
+
+    /**
+     * @param {import("./intermediate").IntermediateInput} input
+     */
+    descendCondition (input) {
+        const node = input.inputs;
+        switch (input.opcode) {
+        case InputOpcode.CONSTANT:
+            if (typeof node.value === 'boolean') {
+                this.emitI32Const(node.value ? 1 : 0);
+                return;
+            }
+            if (typeof node.value === 'number') {
+                this.emitI32Const((!Number.isNaN(node.value) && node.value !== 0) ? 1 : 0);
+                return;
+            }
+            throw new Error('Unsupported constant type for WASM condition');
+        case InputOpcode.CAST_BOOLEAN:
+            if (this.supportsNumericInput(node.target)) {
+                this.descendNumericInput(node.target);
+                this.emitNumberTruthinessFromStack();
+                return;
+            }
+            this.descendCondition(node.target);
+            return;
+        case InputOpcode.OP_AND:
+            this.descendCondition(node.left);
+            this.descendCondition(node.right);
+            this.emit(Op.i32_and);
+            return;
+        case InputOpcode.OP_OR:
+            this.descendCondition(node.left);
+            this.descendCondition(node.right);
+            this.emit(Op.i32_or);
+            return;
+        case InputOpcode.OP_NOT:
+            this.descendCondition(node.operand);
+            this.emit(Op.i32_eqz);
+            return;
+        case InputOpcode.OP_LESS:
+            this.descendNumericInput(node.left);
+            this.descendNumericInput(node.right);
+            this.emit(Op.f64_lt);
+            return;
+        case InputOpcode.OP_GREATER:
+            this.descendNumericInput(node.left);
+            this.descendNumericInput(node.right);
+            this.emit(Op.f64_gt);
+            return;
+        case InputOpcode.OP_EQUALS:
+            this.descendNumericInput(node.left);
+            this.descendNumericInput(node.right);
+            this.emit(Op.f64_eq);
+            return;
+        default:
+            this.descendNumericInput(input);
+            this.emitNumberTruthinessFromStack();
         }
     }
 
@@ -287,57 +540,98 @@ class WasmGenerator {
     descendStackedBlock (block) {
         const node = block.inputs;
         switch (block.opcode) {
-        case StackOpcode.VAR_SET: {
-            const offset = this.getVariableOffset(node.variable);
-            this.emit(Op.i32_const);
-            this.emit(encodeU32(offset));
-            this.descendInput(node.value);
-            this.emit(Op.f64_store);
-            this.emit([0x03, 0x00]);
-            break;
-        }
-        
-        case StackOpcode.CONTROL_WAIT:
-            this.yieldPoint();
-            break;
-
-        case StackOpcode.CONTROL_REPEAT: {
-            this.descendInput(node.times);
+        case StackOpcode.NOP:
+            return;
+        case StackOpcode.VAR_SET:
+            this.descendNumericInput(node.value);
             this.emit(Op.local_set);
-            this.emit(encodeU32(0));
-            
-            this.emit(Op.loop);
-            this.emit(0x40); // void
-            
-            this.emit(Op.local_get);
-            this.emit(encodeU32(0));
-            this.emit(Op.f64_const);
-            this.emit(Array.from(encodeF64(0.5)));
-            this.emit(Op.f64_ge);
-            
+            this.emit(encodeU32(this.getVariableLocal(node.variable)));
+            return;
+        case StackOpcode.CONTROL_IF_ELSE:
+            this.descendCondition(node.condition);
             this.emit(Op.if);
             this.emit(0x40);
-            
-            this.descendStack(node.do);
-            
+            this.descendStack(node.whenTrue);
+            this.emit(Op.else);
+            this.descendStack(node.whenFalse);
+            this.emit(Op.end);
+            return;
+        case StackOpcode.CONTROL_REPEAT: {
+            if (node.times.opcode === InputOpcode.CONSTANT &&
+                Number.isFinite(node.times.inputs.value) &&
+                Number.isInteger(node.times.inputs.value) &&
+                node.times.inputs.value >= 0) {
+                const counter = this.allocateLocal(ValType.i32);
+                this.emitI32Const(node.times.inputs.value);
+                this.emit(Op.local_set);
+                this.emit(encodeU32(counter));
+                this.emit(Op.block);
+                this.emit(0x40);
+                this.emit(Op.loop);
+                this.emit(0x40);
+                this.emit(Op.local_get);
+                this.emit(encodeU32(counter));
+                this.emit(Op.i32_eqz);
+                this.emit(Op.br_if);
+                this.emit(encodeU32(1));
+                this.descendStack(node.do);
+                this.emit(Op.local_get);
+                this.emit(encodeU32(counter));
+                this.emitI32Const(1);
+                this.emit(Op.i32_sub);
+                this.emit(Op.local_set);
+                this.emit(encodeU32(counter));
+                this.emit(Op.br);
+                this.emit(encodeU32(0));
+                this.emit(Op.end);
+                this.emit(Op.end);
+                return;
+            }
+
+            const counter = this.allocateLocal(ValType.f64);
+            this.descendNumericInput(node.times);
+            this.emit(Op.local_set);
+            this.emit(encodeU32(counter));
+            this.emit(Op.block);
+            this.emit(0x40);
+            this.emit(Op.loop);
+            this.emit(0x40);
             this.emit(Op.local_get);
-            this.emit(encodeU32(0));
-            this.emit(Op.f64_const);
-            this.emit(Array.from(encodeF64(1)));
+            this.emit(encodeU32(counter));
+            this.emitF64Const(0.5);
+            this.emit(Op.f64_lt);
+            this.emit(Op.br_if);
+            this.emit(encodeU32(1));
+            this.descendStack(node.do);
+            this.emit(Op.local_get);
+            this.emit(encodeU32(counter));
+            this.emitF64Const(1);
             this.emit(Op.f64_sub);
             this.emit(Op.local_set);
-            this.emit(encodeU32(0));
-            
+            this.emit(encodeU32(counter));
             this.emit(Op.br);
-            this.emit(encodeU32(1));
-            
+            this.emit(encodeU32(0));
             this.emit(Op.end);
             this.emit(Op.end);
-            break;
+            return;
         }
-
+        case StackOpcode.CONTROL_WHILE:
+            this.emit(Op.block);
+            this.emit(0x40);
+            this.emit(Op.loop);
+            this.emit(0x40);
+            this.descendCondition(node.condition);
+            this.emit(Op.i32_eqz);
+            this.emit(Op.br_if);
+            this.emit(encodeU32(1));
+            this.descendStack(node.do);
+            this.emit(Op.br);
+            this.emit(encodeU32(0));
+            this.emit(Op.end);
+            this.emit(Op.end);
+            return;
         default:
-            // Skip unknown
+            throw new Error(`Unsupported stacked block in WASM generator: ${block.opcode}`);
         }
     }
 
@@ -351,20 +645,6 @@ class WasmGenerator {
     }
 
     /**
-     * @param {any} variable
-     * @returns {number} Memory offset
-     */
-    getVariableOffset (variable) {
-        if (this.variablesMap.has(variable.id)) {
-            return this.variablesMap.get(variable.id);
-        }
-        const offset = this.variableBaseOffset + (this.variablesMap.size * 8);
-        this.variablesMap.set(variable.id, offset);
-        return offset;
-    }
-
-    /**
-     * Compiles the script into a Wasm factory.
      * @returns {object}
      */
     compile () {
@@ -372,152 +652,105 @@ class WasmGenerator {
             throw new Error('Script is not supported by the WASM generator');
         }
 
-        if (this.script.stack) {
-            this.descendStack(this.script.stack);
-        }
-        
-        // Final state: Done
-        this.emit(Op.i32_const);
-        this.emit(encodeU32(this.stateOffset));
-        this.emit(Op.i32_const);
-        this.emit(encodeU32(0x7FFFFFFF)); // Special "Done" state
+        this.registerStack(this.script.stack);
+        this.syncVariablesFromMemory();
+        this.descendStack(this.script.stack);
+        this.syncVariablesToMemory();
+        this.emitI32Const(this.stateOffset);
+        this.emitI32Const(0x7FFFFFFF);
         this.emit(Op.i32_store);
         this.emit([0x02, 0x00]);
-        this.emit(Op.i32_const);
-        this.emit(encodeU32(0)); // STATUS_DONE
+        this.emitI32Const(0);
         this.emit(Op.return);
-
-        const wasmBytes = this.assemble();
 
         return {
             format: 'wasm',
-            wasmBytes,
+            wasmBytes: this.assemble(),
             variables: Array.from(this.variablesMap.entries()).map(([id, offset]) => ({id, offset}))
         };
     }
 
+    /**
+     * @param {number[]} payload
+     * @returns {number[]}
+     */
+    createLocalDeclarations (payload) {
+        if (this.locals.length === 0) {
+            return [0];
+        }
+
+        const groups = [];
+        for (const type of this.locals) {
+            const last = groups[groups.length - 1];
+            if (last && last.type === type) {
+                last.count++;
+            } else {
+                groups.push({type, count: 1});
+            }
+        }
+
+        payload.push(...encodeU32(groups.length));
+        for (const group of groups) {
+            payload.push(...encodeU32(group.count), group.type);
+        }
+        return payload;
+    }
+
+    /**
+     * @returns {Uint8Array}
+     */
     assemble () {
         const header = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
-        
-        // Construct the state machine wrapper
-        // block
-        //   block (yield 1)
-        //     block (yield 0)
-        //       global_get state
-        //       br_table 0 1 ...
-        //     end
-        //     (code for state 0)
-        //   end
-        //   (code for state 1)
-        // end
 
-        const wrappedCode = [];
-        const numStates = this.currentState + 1;
-        
-        // Outer blocks for each state
-        for (let i = 0; i < numStates; i++) {
-            wrappedCode.push(Op.block);
-            wrappedCode.push(0x40);
-        }
-
-        // br_table dispatcher
-        wrappedCode.push(Op.i32_const);
-        wrappedCode.push(...encodeU32(this.stateOffset));
-        wrappedCode.push(Op.i32_load);
-        wrappedCode.push(0x02, 0x00);
-        
-        wrappedCode.push(Op.br_table);
-        wrappedCode.push(...encodeU32(numStates - 1));
-        for (let i = 0; i < numStates; i++) {
-            wrappedCode.push(...encodeU32(i));
-        }
-
-        // Now we need to interleave the actual code with the 'end' markers
-        // This is tricky with my current 'emit' approach.
-        // For the prototype, I'll just stick to the linear execution if no yields.
-        // If yields exist, I'll need a more sophisticated IR-to-Wasm mapper.
-
-        // Given the time constraints, I'll provide the linear code as a fallback.
-        const codeBody = [
-            ...encodeU32(1), // groups
-            ...encodeU32(1), // count
-            ValType.f64, // local 0
-            ...this.code,
-            Op.end
+        const typePayload = [
+            ...encodeU32(2),
+            0x60, 0x00, 0x01, ValType.i32,
+            0x60, 0x00, 0x00
         ];
 
-        // ... sections same as before ...
-        const typeSection = [
-            Section.type,
-            ...encodeU32(7),
+        const importPayload = [
             ...encodeU32(2),
-            0x60,
-            0,
-            1,
-            ValType.i32,
-            0x60,
-            0,
-            0
-        ];
-        typeSection[1] = typeSection.length - 2;
-        const importSection = [
-            Section.import,
-            ...encodeU32(23),
-            ...encodeU32(2),
-            3,
-            0x65,
-            0x6e,
-            0x76,
-            6,
-            0x6d,
-            0x65,
-            0x6d,
-            0x6f,
-            0x72,
-            0x79,
+            ...encodeName('env'),
+            ...encodeName('memory'),
             0x02,
             0x00,
             ...encodeU32(1),
-            3,
-            0x65,
-            0x6e,
-            0x76,
-            13,
-            0x72,
-            0x65,
-            0x71,
-            0x75,
-            0x65,
-            0x73,
-            0x74,
-            0x52,
-            0x65,
-            0x64,
-            0x72,
-            0x61,
-            0x77,
+            ...encodeName('env'),
+            ...encodeName('requestRedraw'),
             0x00,
             ...encodeU32(1)
         ];
-        importSection[1] = importSection.length - 2;
-        const funcSection = [Section.function, ...encodeU32(2), ...encodeU32(1), 0];
-        const exportSection = [Section.export, ...encodeU32(7), ...encodeU32(1), 3, 0x72, 0x75, 0x6e, 0x00, 1];
-        exportSection[1] = exportSection.length - 2;
-        const codeSection = [
-            Section.code,
-            ...encodeU32(codeBody.length + 2),
+
+        const functionPayload = [
             ...encodeU32(1),
-            ...encodeU32(codeBody.length),
-            ...codeBody
+            ...encodeU32(0)
         ];
+
+        const exportPayload = [
+            ...encodeU32(1),
+            ...encodeName('run'),
+            0x00,
+            ...encodeU32(1)
+        ];
+
+        const body = this.createLocalDeclarations([]);
+        body.push(...this.code, Op.end);
+
+        const codePayload = [
+            ...encodeU32(1),
+            ...encodeU32(body.length),
+            ...body
+        ];
+
+        const createSection = (id, payload) => [id, ...encodeU32(payload.length), ...payload];
 
         return new Uint8Array([
             ...header,
-            ...typeSection,
-            ...importSection,
-            ...funcSection,
-            ...exportSection,
-            ...codeSection
+            ...createSection(Section.type, typePayload),
+            ...createSection(Section.import, importPayload),
+            ...createSection(Section.function, functionPayload),
+            ...createSection(Section.export, exportPayload),
+            ...createSection(Section.code, codePayload)
         ]);
     }
 }

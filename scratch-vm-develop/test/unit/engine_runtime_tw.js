@@ -129,6 +129,15 @@ test('setCompilerOptions supports partial updates', t => {
     t.end();
 });
 
+test('setCompilerOptions preserves and updates useWasm', t => {
+    const rt = new Runtime();
+    t.equal(rt.compilerOptions.useWasm, typeof WebAssembly === 'object');
+    rt.setCompilerOptions({useWasm: false});
+    t.equal(rt.compilerOptions.useWasm, false);
+    t.equal(rt.compilerOptions.enabled, true);
+    t.end();
+});
+
 test('maxClones runtime option', t => {
     const rt = new Runtime();
     rt.setRuntimeOptions({maxClones: 10});

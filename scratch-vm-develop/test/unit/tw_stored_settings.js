@@ -25,6 +25,11 @@ for (const file of ['empty-comment.sb3', 'no-comment.sb3']) {
                 miscLimits: false,
                 fencing: false
             });
+            vm.setCompilerOptions({
+                enabled: true,
+                warpTimer: true,
+                useWasm: true
+            });
             vm.setStageSize(100, 101);
             vm.storeProjectOptions();
 
@@ -34,6 +39,7 @@ for (const file of ['empty-comment.sb3', 'no-comment.sb3']) {
                     t.equal(newVM.runtime.framerate, vm.runtime.framerate);
                     t.equal(newVM.runtime.turboMode, vm.runtime.turboMode);
                     t.same(newVM.runtime.runtimeOptions, vm.runtime.runtimeOptions);
+                    t.same(newVM.runtime.compilerOptions, vm.runtime.compilerOptions);
                     t.equal(newVM.runtime.interpolationEnabled, vm.runtime.interpolationEnabled);
                     t.equal(newVM.runtime.stageWidth, vm.runtime.stageWidth);
                     t.equal(newVM.runtime.stageHeight, vm.runtime.stageHeight);

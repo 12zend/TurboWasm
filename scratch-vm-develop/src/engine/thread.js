@@ -489,16 +489,15 @@ class Thread {
             return;
         }
 
-        let result;
         if (cachedResult) {
             this.handleCompileResult(cachedResult.value);
         } else {
             const compileResult = compile(this);
             if (compileResult instanceof Promise) {
-                compileResult.then(result => {
-                    this.handleCompileResult(result);
+                compileResult.then(compiledResult => {
+                    this.handleCompileResult(compiledResult);
                     if (canCache) {
-                        blocks.cacheCompileResult(topBlock, result);
+                        blocks.cacheCompileResult(topBlock, compiledResult);
                     }
                 }).catch(error => {
                     log.error('cannot compile script', this.target.getName(), error);

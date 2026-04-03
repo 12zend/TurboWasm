@@ -8,15 +8,23 @@ class GpuOptimizer {
         this.gl = null;
         this.canvas = null;
         this.ready = false;
+        this.minimumBatchSize = 2048;
     }
 
     init () {
+        if (this.ready) {
+            return;
+        }
+
+        if (typeof document === 'undefined') {
+            return;
+        }
+
         try {
             this.canvas = document.createElement('canvas');
             this.gl = this.canvas.getContext('webgl') || this.canvas.getContext('experimental-webgl');
             if (this.gl) {
                 this.ready = true;
-                console.log('GPU Optimizer (WebGL) initialized');
             }
         } catch (e) {
             console.warn('GPU initialization failed', e);
@@ -24,29 +32,66 @@ class GpuOptimizer {
     }
 
     /**
+     * Decide whether a distance batch is worth moving to the GPU.
+     * Readback-heavy workloads stay on the CPU unless the batch is large.
+     * @param {object} options
+     * @returns {"cpu"|"gpu"}
+     */
+    selectDistanceBackend (options) {
+        const {
+            pointCount,
+            requiresReadback = true,
+            arithmeticIntensity = 1
+        } = options;
+
+        if (!this.ready || typeof pointCount !== 'number' || pointCount <= 0) {
+            return 'cpu';
+        }
+
+        const adjustedThreshold = requiresReadback ?
+            Math.ceil(this.minimumBatchSize / Math.max(1, arithmeticIntensity)) :
+            Math.ceil((this.minimumBatchSize / 2) / Math.max(1, arithmeticIntensity));
+
+        return pointCount >= adjustedThreshold ? 'gpu' : 'cpu';
+    }
+
+    /**
+     * @param {object} options
+     * @returns {"cpu"|"gpu"}
+     */
+    selectBackend (options) {
+        switch (options.operation) {
+        case 'distance-batch':
+            return this.selectDistanceBackend(options);
+        default:
+            return 'cpu';
+        }
+    }
+
+    /**
      * Batch calculate distances between multiple points and a target.
-     * This is a conceptual implementation of how GPGPU would be used.
+     * GPU execution is intentionally conservative until a real shader path exists.
      */
     calculateDistances (points, targetX, targetY) {
-        if (!this.ready || points.length < 100) {
-            // Fallback to CPU for small batches
+        const backend = this.selectDistanceBackend({
+            pointCount: points.length,
+            requiresReadback: true,
+            arithmeticIntensity: 1
+        });
+
+        if (backend === 'cpu') {
             return points.map(p => {
                 const dx = p.x - targetX;
                 const dy = p.y - targetY;
-                return Math.sqrt(dx * dx + dy * dy);
+                return Math.sqrt((dx * dx) + (dy * dy));
             });
         }
 
-        // In a real GPGPU implementation:
-        // 1. Upload points to a texture.
-        // 2. Run a shader that calculates distance for each pixel.
-        // 3. Read back the results.
-        
-        // For this prototype, we simulate the acceleration.
+        // Placeholder until a real shader pipeline is wired in.
         return points.map(p => {
             const dx = p.x - targetX;
             const dy = p.y - targetY;
-            return Math.sqrt(dx * dx + dy * dy);
+            return Math.sqrt((dx * dx) + (dy * dy));
         });
     }
 }

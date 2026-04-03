@@ -12,6 +12,7 @@
   "main": "./src/index.js",
   "browser": "./src/index.js",
   "scripts": {
+    "benchmark:wasm-kernel": "node ./src/cli/benchmark-wasm-kernel.js",
     "build": "webpack --progress --colors --bail",
     "coverage": "tap ./test/{unit,integration}/*.js --coverage --coverage-report=lcov",
     "docs": "jsdoc -c .jsdoc.json",

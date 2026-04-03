@@ -462,7 +462,7 @@ class Runtime extends EventEmitter {
         this.compilerOptions = {
             enabled: true,
             warpTimer: false,
-            useWasm: false
+            useWasm: typeof WebAssembly === 'object'
         };
 
         this.debug = false;
@@ -2874,6 +2874,9 @@ class Runtime extends EventEmitter {
         if (parsed.runtimeOptions) {
             this.setRuntimeOptions(parsed.runtimeOptions);
         }
+        if (parsed.compilerOptions) {
+            this.setCompilerOptions(parsed.compilerOptions);
+        }
         if (parsed.hq && this.renderer) {
             this.renderer.setUseHighQualityRender(true);
         }
@@ -2888,6 +2891,7 @@ class Runtime extends EventEmitter {
         return {
             framerate: this.frameLoop.framerate,
             runtimeOptions: this.runtimeOptions,
+            compilerOptions: this.compilerOptions,
             interpolation: this.interpolationEnabled,
             turbo: this.turboMode,
             hq: this.renderer ? this.renderer.useHighQualityRender : false,

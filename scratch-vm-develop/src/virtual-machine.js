@@ -21,7 +21,6 @@ const formatMessage = require('format-message');
 const Variable = require('./engine/variable');
 const newBlockIds = require('./util/new-block-ids');
 const wasmOptimizer = require('./util/wasm-optimizer');
-const gpuOptimizer = require('./util/gpu-optimizer');
 
 const {loadCostume} = require('./import/load-costume.js');
 const {loadSound} = require('./import/load-sound.js');
@@ -72,9 +71,6 @@ class VirtualMachine extends EventEmitter {
 
         // Initialize performance optimizers
         wasmOptimizer.init();
-        if (typeof window !== 'undefined') {
-            gpuOptimizer.init();
-        }
 
         centralDispatch.setService('runtime', createRuntimeService(this.runtime)).catch(e => {
             log.error(`Failed to register runtime service: ${JSON.stringify(e)}`);

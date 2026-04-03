@@ -1,7 +1,6 @@
 const Cast = require('../util/cast');
 const Timer = require('../util/timer');
 const getMonitorIdForBlockWithArgs = require('../util/get-monitor-id');
-const gpuOptimizer = require('../util/gpu-optimizer');
 
 class Scratch3SensingBlocks {
     constructor (runtime) {
@@ -216,12 +215,6 @@ class Scratch3SensingBlocks {
             if (!distTarget) return 10000;
             targetX = distTarget.x;
             targetY = distTarget.y;
-        }
-
-        // Optimization: Use GPU for batch distance calculation if many clones are active
-        if (gpuOptimizer.ready && this.runtime.threads.length > 50) {
-            const results = gpuOptimizer.calculateDistances([{x: util.target.x, y: util.target.y}], targetX, targetY);
-            return results[0];
         }
 
         const dx = util.target.x - targetX;
