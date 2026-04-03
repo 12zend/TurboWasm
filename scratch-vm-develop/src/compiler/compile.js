@@ -4,6 +4,7 @@ const {IRGenerator} = require('./irgen');
 const {IROptimizer} = require('./iroptimizer');
 const compilerWorkerProxy = require('./compiler-worker-proxy');
 const jsexecute = require('./jsexecute');
+const Cast = require('../util/cast');
 
 /**
  * @typedef {Object} CompiledScript
@@ -16,7 +17,7 @@ const jsexecute = require('./jsexecute');
  * @param {import("../engine/thread")} thread
  * @returns {Promise<CompiledScript> | CompiledScript}
  */
-const compile = (thread) => {
+const compile = thread => {
     const irGenerator = new IRGenerator(thread);
     const ir = irGenerator.generate();
 
@@ -33,62 +34,96 @@ const compile = (thread) => {
         effects: target.effects
     };
 
-    // Helper to recreate functions from worker data
-    const createFactory = (data) => {
-        if (data.wasmBytes) {
-            const wasmBytes = data.wasmBytes;
-            return (thread) => {
-                return () => {
-                    const memory = new WebAssembly.Memory({ initial: 1 });
-                    const instance = new WebAssembly.Instance(new WebAssembly.Module(wasmBytes), {
-                        env: {
-                            memory: memory
-                        }
-                    });
-                    return {
-                        next: () => {
-                            const status = instance.exports.run();
-                            if (status === 0) return { done: true };
-                            return { done: false };
-                        }
-                    };
-                };
-            };
-        } else if (data.factorySource) {
-            return jsexecute.scopedEval(data.factorySource);
+    const readVariable = (runtimeThread, variableInfo) => {
+        const variable = runtimeThread.target.lookupVariableById(variableInfo.id);
+        if (!variable) {
+            return 0;
         }
-        throw new Error('Invalid worker result');
+        return Cast.toNumber(variable.value);
     };
 
-    return compilerWorkerProxy.compile({
-        script: ir.entry,
-        ir: ir,
-        targetData,
-        useWasm
-    }).then(entryResult => {
-        const entry = createFactory(entryResult);
-        const procedures = {};
-        const procedurePromises = [];
+    const writeVariable = (runtimeThread, variableInfo, value) => {
+        const variable = runtimeThread.target.lookupVariableById(variableInfo.id);
+        if (!variable) {
+            return;
+        }
+        variable.value = value;
+        if (variable.isCloud) {
+            runtimeThread.target.runtime.ioDevices.cloud.requestUpdateVariable(variable.name, value);
+        }
+    };
 
-        for (const procedureVariant of Object.keys(ir.procedures)) {
-            const procedureData = ir.procedures[procedureVariant];
-            procedurePromises.push(
-                compilerWorkerProxy.compile({
-                    script: procedureData,
-                    ir: ir,
-                    targetData,
-                    useWasm
-                }).then(procResult => {
-                    procedures[procedureVariant] = createFactory(procResult);
-                })
-            );
+    const createWasmFactory = async data => {
+        const module = await WebAssembly.compile(data.wasmBytes);
+        const variables = data.variables || [];
+        return runtimeThread => () => {
+            const memory = new WebAssembly.Memory({initial: 1});
+            const instance = new WebAssembly.Instance(module, {
+                env: {
+                    memory,
+                    requestRedraw: () => {
+                        runtimeThread.target.runtime.requestRedraw();
+                    }
+                }
+            });
+            const view = new DataView(memory.buffer);
+
+            for (const variableInfo of variables) {
+                view.setFloat64(variableInfo.offset, readVariable(runtimeThread, variableInfo), true);
+            }
+
+            return {
+                next: () => {
+                    const status = instance.exports.run();
+                    for (const variableInfo of variables) {
+                        writeVariable(
+                            runtimeThread,
+                            variableInfo,
+                            view.getFloat64(variableInfo.offset, true)
+                        );
+                    }
+                    return {
+                        done: status === 0
+                    };
+                }
+            };
+        };
+    };
+
+    const createFactory = data => {
+        if (data.format === 'js') {
+            return jsexecute.scopedEval(data.factorySource);
+        }
+        if (data.format === 'wasm') {
+            return createWasmFactory(data);
+        }
+        throw new Error(`Invalid worker result format: ${data.format}`);
+    };
+
+    const compileScript = script => compilerWorkerProxy
+        .compile({
+            script,
+            ir,
+            targetData,
+            useWasm
+        })
+        .then(createFactory);
+
+    return Promise.all([
+        compileScript(ir.entry),
+        Promise.all(Object.keys(ir.procedures).map(procedureVariant => compileScript(ir.procedures[procedureVariant])))
+    ]).then(([entry, compiledProcedures]) => {
+        const procedures = {};
+        const procedureVariants = Object.keys(ir.procedures);
+        for (let i = 0; i < procedureVariants.length; i++) {
+            procedures[procedureVariants[i]] = compiledProcedures[i];
         }
 
-        return Promise.all(procedurePromises).then(() => ({
+        return {
             startingFunction: entry,
             procedures,
             executableHat: ir.entry.executableHat
-        }));
+        };
     });
 };
 

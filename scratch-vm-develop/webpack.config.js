@@ -33,9 +33,10 @@ class DuplicateAssetPlugin {
     }
 }
 
-const base = {
+const base = Object.assign({}, isBuild ? {
+    parallelism: 20
+} : {}, {
     mode: 'development',
-    parallelism: isBuild ? 20 : undefined,
     devServer: {
         contentBase: false,
         host: '0.0.0.0',
@@ -64,7 +65,7 @@ const base = {
         }]
     },
     plugins: []
-};
+});
 
 module.exports = [
     // Web-compatible
@@ -72,7 +73,8 @@ module.exports = [
         name: 'web',
         target: 'web',
         entry: {
-            'scratch-vm': './src/index.js'
+            'scratch-vm': './src/index.js',
+            'dist/compiler-worker': './src/compiler/compiler-worker.js'
         },
         output: {
             libraryTarget: 'umd',

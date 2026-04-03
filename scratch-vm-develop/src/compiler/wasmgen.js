@@ -1,7 +1,6 @@
 // @ts-check
 
-const log = require('../util/log');
-const {StackOpcode, InputOpcode, InputType} = require('./enums.js');
+const {StackOpcode, InputOpcode} = require('./enums.js');
 
 /**
  * @fileoverview Convert intermediate representations to WebAssembly binaries.
@@ -46,7 +45,7 @@ const Op = {
     f64_mul: 0xa2,
     f64_div: 0xa3,
     i32_add: 0x6a,
-    br_table: 0x0e,
+    br_table: 0x0e
 };
 
 // Section IDs
@@ -126,6 +125,64 @@ class WasmGenerator {
         this.variableBaseOffset = 1024;
     }
 
+    supportsInput (input) {
+        switch (input.opcode) {
+        case InputOpcode.CONSTANT:
+        case InputOpcode.VAR_GET:
+            return true;
+
+        case InputOpcode.CAST_NUMBER:
+        case InputOpcode.CAST_NUMBER_OR_NAN:
+        case InputOpcode.CAST_NUMBER_INDEX:
+            return this.supportsInput(input.inputs.target);
+
+        case InputOpcode.OP_ADD:
+        case InputOpcode.OP_SUBTRACT:
+        case InputOpcode.OP_MULTIPLY:
+        case InputOpcode.OP_DIVIDE:
+        case InputOpcode.OP_LESS:
+            return this.supportsInput(input.inputs.left) && this.supportsInput(input.inputs.right);
+
+        default:
+            return false;
+        }
+    }
+
+    supportsStackedBlock (block) {
+        if (block.yields) {
+            return false;
+        }
+
+        const node = block.inputs;
+        switch (block.opcode) {
+        case StackOpcode.VAR_SET:
+            return this.supportsInput(node.value);
+
+        case StackOpcode.CONTROL_REPEAT:
+            return this.supportsInput(node.times) && this.supportsStack(node.do);
+
+        default:
+            return false;
+        }
+    }
+
+    supportsStack (stack) {
+        for (const block of stack.blocks) {
+            if (!this.supportsStackedBlock(block)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    supportsScript () {
+        return (
+            Boolean(this.script.stack) &&
+            !this.script.yields &&
+            this.supportsStack(this.script.stack)
+        );
+    }
+
     /**
      * @param {number | number[]} bytes
      */
@@ -174,6 +231,12 @@ class WasmGenerator {
                 this.emit(Op.f64_const);
                 this.emit(Array.from(encodeF64(node.value ? 1 : 0)));
             }
+            break;
+
+        case InputOpcode.CAST_NUMBER:
+        case InputOpcode.CAST_NUMBER_OR_NAN:
+        case InputOpcode.CAST_NUMBER_INDEX:
+            this.descendInput(node.target);
             break;
 
         case InputOpcode.VAR_GET: {
@@ -302,12 +365,12 @@ class WasmGenerator {
 
     /**
      * Compiles the script into a Wasm factory.
-     * @returns {Function}
+     * @returns {object}
      */
     compile () {
-        // We'll wrap the entire script in a nested block structure to support re-entry via br_table.
-        // For each yield point, we need an outer block.
-        const numYields = this.script.yields ? 100 : 0; // Placeholder, or analyze script first
+        if (!this.supportsScript()) {
+            throw new Error('Script is not supported by the WASM generator');
+        }
 
         if (this.script.stack) {
             this.descendStack(this.script.stack);
@@ -325,27 +388,11 @@ class WasmGenerator {
         this.emit(Op.return);
 
         const wasmBytes = this.assemble();
-        
-        return (thread) => {
-            return () => {
-                const memory = new WebAssembly.Memory({ initial: 1 });
-                const instance = new WebAssembly.Instance(new WebAssembly.Module(wasmBytes), {
-                    env: {
-                        memory: memory,
-                        requestRedraw: () => {
-                            thread.target.runtime.requestRedraw();
-                        }
-                    }
-                });
-                
-                return {
-                    next: () => {
-                        const status = instance.exports.run();
-                        if (status === 0) return { done: true };
-                        return { done: false };
-                    }
-                };
-            };
+
+        return {
+            format: 'wasm',
+            wasmBytes,
+            variables: Array.from(this.variablesMap.entries()).map(([id, offset]) => ({id, offset}))
         };
     }
 
@@ -394,22 +441,84 @@ class WasmGenerator {
         const codeBody = [
             ...encodeU32(1), // groups
             ...encodeU32(1), // count
-            ValType.f64,     // local 0
+            ValType.f64, // local 0
             ...this.code,
             Op.end
         ];
 
         // ... sections same as before ...
-        const typeSection = [Section.type, ...encodeU32(7), ...encodeU32(2), 0x60, 0, 1, ValType.i32, 0x60, 0, 0];
+        const typeSection = [
+            Section.type,
+            ...encodeU32(7),
+            ...encodeU32(2),
+            0x60,
+            0,
+            1,
+            ValType.i32,
+            0x60,
+            0,
+            0
+        ];
         typeSection[1] = typeSection.length - 2;
-        const importSection = [Section.import, ...encodeU32(23), ...encodeU32(2), 3, 0x65, 0x6e, 0x76, 6, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, ...encodeU32(1), 3, 0x65, 0x6e, 0x76, 13, 0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x52, 0x65, 0x64, 0x72, 0x61, 0x77, 0x00, ...encodeU32(1)];
+        const importSection = [
+            Section.import,
+            ...encodeU32(23),
+            ...encodeU32(2),
+            3,
+            0x65,
+            0x6e,
+            0x76,
+            6,
+            0x6d,
+            0x65,
+            0x6d,
+            0x6f,
+            0x72,
+            0x79,
+            0x02,
+            0x00,
+            ...encodeU32(1),
+            3,
+            0x65,
+            0x6e,
+            0x76,
+            13,
+            0x72,
+            0x65,
+            0x71,
+            0x75,
+            0x65,
+            0x73,
+            0x74,
+            0x52,
+            0x65,
+            0x64,
+            0x72,
+            0x61,
+            0x77,
+            0x00,
+            ...encodeU32(1)
+        ];
         importSection[1] = importSection.length - 2;
         const funcSection = [Section.function, ...encodeU32(2), ...encodeU32(1), 0];
-        const exportSection = [Section.export, ...encodeU32(7), ...encodeU32(1), 3, 0x72, 0x75, 0x6e, 0x00, 0];
+        const exportSection = [Section.export, ...encodeU32(7), ...encodeU32(1), 3, 0x72, 0x75, 0x6e, 0x00, 1];
         exportSection[1] = exportSection.length - 2;
-        const codeSection = [Section.code, ...encodeU32(codeBody.length + 2), ...encodeU32(1), ...encodeU32(codeBody.length), ...codeBody];
+        const codeSection = [
+            Section.code,
+            ...encodeU32(codeBody.length + 2),
+            ...encodeU32(1),
+            ...encodeU32(codeBody.length),
+            ...codeBody
+        ];
 
-        return new Uint8Array([...header, ...typeSection, ...importSection, ...funcSection, ...exportSection, ...codeSection]);
+        return new Uint8Array([
+            ...header,
+            ...typeSection,
+            ...importSection,
+            ...funcSection,
+            ...exportSection,
+            ...codeSection
+        ]);
     }
 }
 

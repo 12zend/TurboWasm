@@ -4,15 +4,31 @@
  * @fileoverview Manages a pool of compiler workers.
  */
 
-// We use inline worker-loader here for convenience
-const CompilerWorker = require('worker-loader?name=dist/compiler-worker.js!./compiler-worker');
+const {compileTask} = require('./compile-task');
+
+let CompilerWorker = null;
+try {
+    CompilerWorker = require('worker-loader?name=dist/compiler-worker.js!./compiler-worker');
+} catch (e) {
+    CompilerWorker = null;
+}
 
 class CompilerWorkerProxy {
     constructor () {
-        this.workerCount = Math.min(4, navigator.hardwareConcurrency || 2);
         this.workers = [];
         this.idleWorkers = [];
         this.queue = [];
+        this.canUseWorkers = Boolean(
+            CompilerWorker &&
+            typeof navigator !== 'undefined' &&
+            typeof Promise === 'function'
+        );
+
+        if (!this.canUseWorkers) {
+            return;
+        }
+
+        this.workerCount = Math.min(4, navigator.hardwareConcurrency || 2);
 
         for (let i = 0; i < this.workerCount; i++) {
             const worker = new CompilerWorker();
@@ -26,6 +42,10 @@ class CompilerWorkerProxy {
      * @returns {Promise<Object>}
      */
     compile (data) {
+        if (!this.canUseWorkers) {
+            return Promise.resolve().then(() => compileTask(data));
+        }
+
         return new Promise((resolve, reject) => {
             this.queue.push({data, resolve, reject});
             this.processQueue();
@@ -39,32 +59,31 @@ class CompilerWorkerProxy {
 
         const {data, resolve, reject} = this.queue.shift();
         const worker = this.idleWorkers.shift();
+        const proxy = this;
+        const listeners = {};
+        const releaseWorker = () => {
+            worker.removeEventListener('message', listeners.message);
+            worker.removeEventListener('error', listeners.error);
+            proxy.idleWorkers.push(worker);
+            proxy.processQueue();
+        };
 
-        const onMessage = (event) => {
-            worker.removeEventListener('message', onMessage);
-            worker.removeEventListener('error', onError);
-            this.idleWorkers.push(worker);
-            this.processQueue();
-            
+        listeners.message = event => {
+            releaseWorker();
             if (event.data.success) {
-                resolve(event.data);
+                resolve(event.data.result);
             } else {
                 reject(new Error(event.data.error));
             }
         };
 
-        const onError = (error) => {
-            worker.removeEventListener('message', onMessage);
-            worker.removeEventListener('error', onError);
-            // Worker is likely broken, recreate it?
-            // For now just put it back
-            this.idleWorkers.push(worker);
-            this.processQueue();
+        listeners.error = error => {
+            releaseWorker();
             reject(error);
         };
 
-        worker.addEventListener('message', onMessage);
-        worker.addEventListener('error', onError);
+        worker.addEventListener('message', listeners.message);
+        worker.addEventListener('error', listeners.error);
         worker.postMessage(data);
     }
 }
